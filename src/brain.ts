@@ -23,6 +23,8 @@ function load<T>(name: string, fallback: T): T {
 const save = (name: string, value: unknown) => writeFileSync(file(name), JSON.stringify(value));
 
 let session: AgentSession;
+/** Re-read for every delivery, so edits to persona.md and prompts/brain.md apply without a restart. */
+let prompt = '';
 /** Mentions and DMs that haven't been answered yet, persisted so a restart re-queues them. */
 const pending = new Map<string, Pending>(load<Pending[]>('pending.json', []).map(p => [p.messageId, { ...p, delivered: false }]));
 let wakes = load<Wake[]>('wakes.json', []);
@@ -72,6 +74,9 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
     lastBatch = `[events · ${localTime()}]\n${lines}${memo}`;
     lastActivity = Date.now();
     await new Promise<void>(accepted => {
+      const fail = (err: unknown) => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); };
+      // Read here, not in Pi's hook: Pi swallows hook errors and would quietly keep the old prompt.
+      try { prompt = systemPrompt('brain', container.client.user!); } catch (err) { return fail(err); }
       session.prompt(lastBatch, {
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
@@ -82,7 +87,7 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
           else if (!pingedTo) speakTo = target;
           accepted();
         },
-      }).catch(err => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); });
+      }).catch(fail);
     });
   }).catch(err => report(err));
 }
@@ -223,8 +228,9 @@ const wakeMe = defineTool({
 
 export async function start() {
   const me = container.client.user!;
+  prompt = systemPrompt('brain', me);
   session = await makeSession(
-    systemPrompt('brain', me),
+    () => prompt,
     [...discordTools(false), wakeMe, searchHistory, ...workerTools(deliver)],
     SessionManager.continueRecent(config.dataDir, sessionsDir),
   );

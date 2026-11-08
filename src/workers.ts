@@ -58,7 +58,8 @@ export function workerTools(deliver: Deliver) {
         workers.set(id, w);
         void (async () => {
           try {
-            w.session = await makeSession(systemPrompt('worker', container.client.user!), [...discordTools(true), ...workerSide(id)], SessionManager.inMemory(config.dataDir));
+            const prompt = systemPrompt('worker', container.client.user!);
+            w.session = await makeSession(() => prompt, [...discordTools(true), ...workerSide(id)], SessionManager.inMemory(config.dataDir));
             await w.session.prompt(p.task, { expandPromptTemplates: false });
             const last = lastReply(w.session);
             if (last?.stopReason === 'error' || last?.stopReason === 'aborted') throw new Error(last.errorMessage ?? last.stopReason);

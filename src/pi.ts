@@ -38,11 +38,17 @@ const guard: ExtensionFactory = pi => {
   });
 };
 
+function read(file: string) {
+  const text = readFileSync(resolve(root, file), 'utf8');
+  if (!text.trim()) throw new Error(`${file} is empty`);
+  return text;
+}
+
 export const systemPrompt = (kind: 'brain' | 'worker', me: User) =>
-  [kind === 'brain' && readFileSync(resolve(root, 'persona.md'), 'utf8'), readFileSync(resolve(root, `prompts/${kind}.md`), 'utf8')]
+  [kind === 'brain' && read('persona.md'), read(`prompts/${kind}.md`)]
     .filter(Boolean).join('\n\n').replaceAll('{{name}}', me.username).replaceAll('{{id}}', me.id);
 
-export async function makeSession(prompt: string, tools: ToolDefinition[], sessionManager: SessionManager): Promise<AgentSession> {
+export async function makeSession(prompt: () => string, tools: ToolDefinition[], sessionManager: SessionManager): Promise<AgentSession> {
   const cwd = config.dataDir;
   const settingsManager = SettingsManager.inMemory({
     defaultTools: ['+codemode', '+tool_search'],
@@ -51,10 +57,14 @@ export async function makeSession(prompt: string, tools: ToolDefinition[], sessi
   });
   const resourceLoader = new DefaultResourceLoader({
     cwd, agentDir, settingsManager,
-    systemPromptOverride: () => prompt,
+    systemPromptOverride: prompt,
     appendSystemPromptOverride: () => [],
     agentsFilesOverride: () => ({ agentsFiles: [] }),
-    extensionFactories: [createCodemodeExtension(), createToolSearchExtension(), createMcpExtension(), guard],
+    extensionFactories: [
+      createCodemodeExtension(), createToolSearchExtension(), createMcpExtension(), guard,
+      // Prompt edits apply from the next run; Pi records a changed prompt as one patch, as it does after a restart.
+      pi => { pi.on('before_agent_start', e => { e.systemPromptOptions.customPrompt = prompt(); }); },
+    ],
   });
   await resourceLoader.reload({ resolveProjectTrust: async () => true });
   const { session } = await createAgentSession({
