@@ -71,6 +71,7 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
         preflightResult: () => {
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
           if (channelId) lastChannel = channelId;
+          if (ids.length && channelId) typing(channelId);
           accepted();
         },
       }).catch(err => { void report(err, take(ids)); accepted(); });
@@ -119,10 +120,20 @@ function onEvent(e: AgentSessionEvent) {
   } else if (e.type === 'agent_settled') settle(e.aborted);
 }
 
+const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
+export const isPending = (messageId: string) => pending.has(messageId);
+
+/** Post the way a person would: separate thoughts as separate short messages, quoting only when the chat moved on. */
 async function speak(said: string, target: Pending | string) {
   try {
-    const to = typeof target === 'string' ? await channel(target) : await fetchMessage(target.channelId, target.messageId);
-    for (const chunk of split(redact(said))) await (typeof target === 'string' ? (to as Awaited<ReturnType<typeof channel>>).send(chunk) : (to as Awaited<ReturnType<typeof fetchMessage>>).reply(chunk));
+    const c = await channel(typeof target === 'string' ? target : target.channelId);
+    const thoughts = said.split(/\n\s*\n/);
+    const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
+    for (const [i, part] of (chatty ? thoughts : split(said)).entries()) {
+      if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.length * 20, 3000))); }
+      const quote = i === 0 && typeof target !== 'string' && c.lastMessageId !== target.messageId;
+      await c.send({ content: redact(part), reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
+    }
   } catch (error) { await report(error, typeof target === 'string' ? [] : [target]); }
 }
 
@@ -161,7 +172,7 @@ function tick() {
   const now = Date.now();
   if (session.isStreaming) {
     const channels = new Set([...pending.values()].filter(p => p.delivered).map(p => p.channelId));
-    for (const id of channels) void container.client.channels.fetch(id).then(c => { if (c?.isSendable()) return c.sendTyping(); }).catch(() => {});
+    for (const id of channels) typing(id);
     if (now - lastActivity > STALL_MS && !failure) {
       failure = new Error(`stalled: no model or tool activity for ${STALL_MS / 60_000} minutes`);
       void session.abort();

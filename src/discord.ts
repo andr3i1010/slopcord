@@ -31,7 +31,8 @@ async function onMessage(m: Message) {
   const mention = !m.author.bot && (!m.inGuild() || m.mentions.users.has(me) || m.mentions.repliedUser?.id === me);
   if (!mention) return queue(m.channelId, describe(m));
   brain.addPending(m.channelId, m.id);
-  await m.react('👀').catch(() => {});
+  // People don't ack every ping; 👀 only shows up when the answer is slow.
+  setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
   const images = await Promise.all(m.attachments.filter(a => !!a.contentType?.startsWith('image/')).map(a => fetchImage(a.url).catch(() => undefined)));
   queue(m.channelId, describe(m), true, images.filter(i => i !== undefined), m.id);
 }
