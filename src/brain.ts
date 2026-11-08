@@ -151,6 +151,9 @@ export const isPending = (messageId: string) => pending.has(messageId);
 async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
+    // In a busy chat only the model knows which message it's answering: `[re:<id>]` up front picks it.
+    const re = /^\s*\[re:\s*(\d{17,20})\]\s*/.exec(said);
+    if (re) { target = { ...target, messageId: re[1] }; said = said.slice(re[0].length); }
     said = redact(said);
     const thoughts = said.split(/\n\s*\n/);
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
