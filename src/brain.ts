@@ -6,7 +6,7 @@ import { container } from '@sapphire/framework';
 import { Type } from 'typebox';
 import { chain, config, localTime, redact } from './config.ts';
 import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
-import { ask, lastReply, makeSession, systemPrompt } from './pi.ts';
+import { lastReply, makeSession, systemPrompt } from './pi.ts';
 import { channel, describe, discordTools, fetchMessage, outgoing, text } from './tools.ts';
 import { workerList, workerTools } from './workers.ts';
 
@@ -34,7 +34,7 @@ type Batch = { lines: string; images: ImageContent[]; urgent: boolean; ids: stri
 /** One run is about one channel, so its answers can't land elsewhere. Batches for other channels wait here. */
 let waiting: Batch[] = [];
 let running: string | undefined; // channel of the current run; '' for channel-less events (wakes, workers)
-let speakTo: Pending | undefined, pingedTo = false, sentTo = new Set<string>(), turnLines: string[] = [];
+let speakTo: Pending | undefined, pingedTo = false, sentTo = new Set<string>();
 const recentDms = new Map<string, number>();
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
@@ -64,8 +64,7 @@ function addWake(ms: number, why: string) {
 export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
   gate = gate.then(async () => {
     const key = target?.channelId ?? '';
-    // Other channels wait, and so do further pings: one ping per turn, so each gets its own reply.
-    if (running !== undefined && (running !== key || ids.length)) return void waiting.push({ lines, images, urgent, ids, target });
+    if (running !== undefined && running !== key) return void waiting.push({ lines, images, urgent, ids, target });
     await compacting;
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
@@ -79,7 +78,6 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
           running = key;
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
           // Answer the ping if there is one; a later chatter batch doesn't steal its reply.
-          turnLines.push(lines);
           if (ids.length) { speakTo = { channelId: key, messageId: ids.at(-1)! }; pingedTo = true; typing(key); }
           else if (!pingedTo) speakTo = target;
           accepted();
@@ -109,11 +107,11 @@ function settle(aborted: boolean) {
   }
 }
 
-/** Next waiting batch: pings first and one at a time; chatter that piled up for a channel is merged. */
+/** Next waiting channel (pings first), with everything that piled up for it merged into one batch. */
 function pump() {
-  const next = waiting.find(b => b.ids.length) ?? waiting[0];
+  const next = waiting.find(b => b.urgent) ?? waiting[0];
   if (!next) return;
-  const same = next.ids.length ? [next] : waiting.filter(b => !b.ids.length && b.target?.channelId === next.target?.channelId);
+  const same = waiting.filter(b => b.target?.channelId === next.target?.channelId);
   waiting = waiting.filter(b => !same.includes(b));
   deliver(same.map(b => b.lines).join('\n'), same.flatMap(b => b.images), same.some(b => b.urgent), same.flatMap(b => b.ids), same.at(-1)!.target);
 }
@@ -123,32 +121,10 @@ function answered(reply: AssistantMessage) {
   const said = reply.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim();
   // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a stage-direction line is never chat.
   const silent = /^[`'"]?-[`'"]?$/.test(said) || said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
-  const to = speakTo, pinged = pingedTo, lines = turnLines, skip = !to || sentTo.has(to.channelId);
+  // Replies to specific people go through send(replyTo); final text is a plain remark to the channel.
+  if (said && !silent && speakTo && !sentTo.has(speakTo.channelId)) void speak(said, speakTo, pingedTo);
   pingedTo = false;
   sentTo = new Set();
-  turnLines = [];
-  if (!said || silent || skip) return;
-  void (async () => {
-    const quote = pinged ? to!.messageId : await answering(lines, said);
-    await speak(said, { channelId: to!.channelId, messageId: quote ?? to!.messageId }, !!quote, pinged);
-  })();
-}
-
-/**
- * With several people talking, only the model knows whom it answered, and it won't say so through send's replyTo.
- * A small side question picks the message, so the answer can reply to it.
- */
-async function answering(lines: string[], said: string) {
-  const messages = lines.join('\n').split('\n').flatMap(line => {
-    try { const e = JSON.parse(line); return (e.kind === 'message' || e.kind === 'edit') && !e.author?.bot ? [e] : []; } catch { return []; }
-  });
-  if (new Set(messages.map(m => m.author.id)).size < 2) return;
-  const pick = await ask([
-    'Chat messages:', ...messages.map(m => `${m.id} ${m.author.name}: ${m.text}`), '',
-    `A reply is about to be posted: ${said}`, '',
-    "Which message is it answering? Answer with only that message's id, or none if it's meant for everyone.",
-  ].join('\n')).catch(() => '');
-  return messages.find(m => pick.includes(m.id))?.id as string | undefined;
 }
 
 function onEvent(e: AgentSessionEvent) {
@@ -172,8 +148,8 @@ function onEvent(e: AgentSessionEvent) {
 const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
 export const isPending = (messageId: string) => pending.has(messageId);
 
-/** Post the way a person would: separate thoughts as separate short messages. An answer to a ping replies to it (not in DMs). */
-async function speak(said: string, target: Pending, quote: boolean, pinged: boolean) {
+/** A plain remark to the channel; separate thoughts go out as separate short messages. */
+async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
     said = redact(said);
@@ -181,8 +157,7 @@ async function speak(said: string, target: Pending, quote: boolean, pinged: bool
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
     for (const [i, part] of (chatty ? thoughts.map(content => ({ content })) : outgoing(said)).entries()) {
       if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.content.length * 20, 3000))); }
-      const reply = i === 0 && quote && !c.isDMBased() ? { messageReference: target.messageId, failIfNotExists: false } : undefined;
-      await c.send({ ...part, reply });
+      await c.send(part);
     }
   } catch (error) { await report(error, pinged ? [target] : []); }
 }
@@ -250,9 +225,7 @@ export async function start() {
   const me = container.client.user!;
   session = await makeSession(
     systemPrompt('brain', me),
-    // The first send in a turn that answers a ping, without its own replyTo, replies to that ping.
-    [...discordTools(false, channelId => { if (!pingedTo || speakTo?.channelId !== channelId) return; pingedTo = false; return speakTo.messageId; }),
-      wakeMe, searchHistory, ...workerTools(deliver)],
+    [...discordTools(false), wakeMe, searchHistory, ...workerTools(deliver)],
     SessionManager.continueRecent(config.dataDir, sessionsDir),
   );
   session.subscribe(onEvent);
