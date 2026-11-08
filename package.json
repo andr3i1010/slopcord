@@ -13,7 +13,8 @@
     "upload-check": "node test/upload-check.ts",
     "mcp-check": "node test/mcp-check.ts",
     "compact-check": "node test/compact-check.ts",
-    "media-check": "node test/media-check.ts"
+    "media-check": "node test/media-check.ts",
+    "routing-check": "DATA_DIR=$(mktemp -d) node test/routing-check.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",

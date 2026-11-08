@@ -30,7 +30,11 @@ let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {}, compactingNow = false;
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
 let failure: Error | undefined;
-let sentTo = new Set<string>(), lastTarget: Pending | undefined;
+type Batch = { lines: string; images: ImageContent[]; urgent: boolean; ids: string[]; target?: Pending };
+/** One run is about one channel, so its answers can't land elsewhere. Batches for other channels wait here. */
+let waiting: Batch[] = [];
+let running: string | undefined; // channel of the current run; '' for channel-less events (wakes, workers)
+let speakTo: Pending | undefined, pingedTo = false, sentTo = new Set<string>();
 const recentDms = new Map<string, number>();
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
@@ -53,12 +57,14 @@ function addWake(ms: number, why: string) {
 }
 
 /**
- * Hand events to the one brain. Pi's queue does the scheduling: idle starts a run, busy queues it
- * (`steer` lands after the current tool call, `followUp` after the run). The gate keeps two deliveries
- * from racing into two runs.
+ * Hand events to the one brain. Idle starts a run; the same channel joins the running one through Pi's queue
+ * (`steer` lands after the current tool call, `followUp` after the turn); other channels wait for the run to end.
+ * The gate keeps two deliveries from racing into two runs.
  */
 export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
   gate = gate.then(async () => {
+    const key = target?.channelId ?? '';
+    if (running !== undefined && running !== key) return void waiting.push({ lines, images, urgent, ids, target });
     await compacting;
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
@@ -69,12 +75,14 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
       session.prompt(lastBatch, {
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
+          running = key;
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
-          if (target) lastTarget = target;
-          if (ids.length && target) typing(target.channelId);
+          // Answer the ping if there is one; a later chatter batch doesn't steal its reply.
+          if (ids.length) { speakTo = { channelId: key, messageId: ids.at(-1)! }; pingedTo = true; typing(key); }
+          else if (!pingedTo) speakTo = target;
           accepted();
         },
-      }).catch(err => { void report(err, take(ids)); accepted(); });
+      }).catch(err => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); });
     });
   }).catch(err => report(err));
 }
@@ -87,22 +95,35 @@ function settle(aborted: boolean) {
   const done = take([...pending.values()].filter(p => p.delivered).map(p => p.messageId));
   if (err) void report(err, done, errored ? last : undefined);
   else for (const p of done) void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
-  // Final text is the answer: to a waiting ping, else in the channel of the latest messages. `-` means staying quiet.
-  const said = !err && last && last.timestamp >= runStarted && last.stopReason === 'stop'
-    ? last.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim() : '';
-  const pinged = done.findLast(p => !sentTo.has(p.channelId));
-  const target = pinged ?? (lastTarget && !sentTo.has(lastTarget.channelId) ? lastTarget : undefined);
-  // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a stage-direction line is never chat.
-  const silent = /^[`'"]?-[`'"]?$/.test(said) || said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
-  if (said && !silent && target) void speak(said, target, !!pinged);
-  lastTarget = undefined;
+  running = speakTo = undefined;
+  pingedTo = false;
   sentTo = new Set();
+  pump();
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
   const usage = session.getContextUsage();
   if (!nudged && (usage?.percent ?? 0) > 75) {
     nudged = true;
     deliver(`[harness] Context is ${Math.round(usage!.percent!)}% full; older context will be summarized soon. Save anything worth keeping to notes/ now.`);
   }
+}
+
+/** Next waiting channel (pings first), with everything that piled up for it merged into one batch. */
+function pump() {
+  const next = waiting.find(b => b.urgent) ?? waiting[0];
+  if (!next) return;
+  const same = waiting.filter(b => b.target?.channelId === next.target?.channelId);
+  waiting = waiting.filter(b => !same.includes(b));
+  deliver(same.map(b => b.lines).join('\n'), same.flatMap(b => b.images), same.some(b => b.urgent), same.flatMap(b => b.ids), same.at(-1)!.target);
+}
+
+/** Each finished turn's final text is said where that turn's messages came from. `-` means staying quiet. */
+function answered(reply: AssistantMessage) {
+  const said = reply.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim();
+  // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a stage-direction line is never chat.
+  const silent = /^[`'"]?-[`'"]?$/.test(said) || said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
+  if (said && !silent && speakTo && !sentTo.has(speakTo.channelId)) void speak(said, speakTo, pingedTo);
+  pingedTo = false;
+  sentTo = new Set();
 }
 
 function onEvent(e: AgentSessionEvent) {
@@ -112,6 +133,7 @@ function onEvent(e: AgentSessionEvent) {
     lastTool = `${e.toolName} ${JSON.stringify(e.args)}`.slice(0, 4000);
     if (e.toolName === 'send') sentTo.add(e.args?.channelId);
   }
+  else if (e.type === 'message_end' && e.message.role === 'assistant' && e.message.stopReason === 'stop') answered(e.message);
   else if (e.type === 'compaction_start') { compactingNow = true; compacting = new Promise(done => (endCompaction = done)); }
   else if (e.type === 'compaction_end') {
     endCompaction();
