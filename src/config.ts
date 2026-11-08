@@ -20,7 +20,7 @@ export const config = {
   model: env('AI_MODEL'),
   apiKey: env('AI_API_KEY'),
   contextWindow: Number(env('AI_CONTEXT_WINDOW', '131072')),
-  maxTokens: Number(env('AI_MAX_TOKENS', '4096')),
+  maxTokens: Number(env('AI_MAX_TOKENS', '16384')),
   dataDir: resolve(root, env('DATA_DIR', 'data')),
   timeZone: env('TZ', 'Europe/Amsterdam'),
 };
