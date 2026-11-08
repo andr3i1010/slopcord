@@ -25,16 +25,29 @@ function queue(channelId: string, line: string, urgent = false, images: ImageCon
   else b.timer = setTimeout(flush, Math.min(4000, b.first + 15_000 - Date.now()));
 }
 
+const CONVERSATION_MS = 3 * 60_000;
+const spokeAt = new Map<string, number>();
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Why a message is probably meant for the bot, if it is: pinged/replied/DM, named, or right after the bot spoke there. */
+function addressed(m: Message) {
+  const me = m.client.user;
+  if (!m.inGuild() || m.mentions.users.has(me.id) || m.mentions.repliedUser?.id === me.id) return 'mention';
+  const names = [me.username, me.globalName, m.guild.members.me?.displayName, 'slopcord'].filter(n => !!n).map(n => escape(n!));
+  if (new RegExp(`(^|[^\\p{L}\\p{N}])(${names.join('|')})($|[^\\p{L}\\p{N}])`, 'iu').test(m.content)) return 'name';
+  if (Date.now() - (spokeAt.get(m.channelId) ?? 0) < CONVERSATION_MS) return 'conversation';
+}
+
 async function onMessage(m: Message) {
-  const me = m.client.user.id;
-  if (m.author.id === me) return;
-  const mention = !m.author.bot && (!m.inGuild() || m.mentions.users.has(me) || m.mentions.repliedUser?.id === me);
-  if (!mention) return queue(m.channelId, describe(m));
+  if (m.author.id === m.client.user.id) { spokeAt.set(m.channelId, Date.now()); return; }
+  const toYou = m.author.bot ? undefined : addressed(m);
+  if (!toYou) return queue(m.channelId, describe(m));
   brain.addPending(m.channelId, m.id);
-  // People don't ack every ping; 👀 only shows up when the answer is slow.
-  setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
+  // People don't ack every ping; 👀 only shows up when an actual ping is answered slowly.
+  if (toYou === 'mention') setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
   const images = await Promise.all(m.attachments.filter(a => !!a.contentType?.startsWith('image/')).map(a => fetchImage(a.url).catch(() => undefined)));
-  queue(m.channelId, describe(m), true, images.filter(i => i !== undefined), m.id);
+  // Follow-ups in a conversation are batched like chatter, so someone typing three lines gets one answer.
+  queue(m.channelId, describe(m, 'message', toYou), toYou !== 'conversation', images.filter(i => i !== undefined), m.id);
 }
 
 async function onEdit(old: Message | PartialMessage, m: Message | PartialMessage) {
