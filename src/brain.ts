@@ -90,7 +90,9 @@ function settle(aborted: boolean) {
   const said = !err && last && last.timestamp >= runStarted && last.stopReason === 'stop'
     ? last.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim() : '';
   const target = done.findLast(p => !sentTo.has(p.channelId)) ?? (lastChannel && !sentTo.has(lastChannel) ? lastChannel : undefined);
-  if (said && target) void speak(said, target);
+  // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a lone stage direction is never chat.
+  const silent = /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(said);
+  if (said && !silent && target) void speak(said, target);
   sentTo = new Set();
   lastChannel = undefined;
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
