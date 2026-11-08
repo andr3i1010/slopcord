@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
-import { PermissionFlagsBits, type Message } from 'discord.js';
+import type { Message } from 'discord.js';
 import { Type } from 'typebox';
 import { config, leaksSecret, redact } from './config.ts';
 import { loadMedia, media } from './media.ts';
@@ -18,19 +18,15 @@ export async function channel(id: string) {
 
 export const fetchMessage = async (channelId: string, messageId: string) => (await channel(channelId)).messages.fetch(messageId);
 
-const { Administrator, ManageGuild, ModerateMembers, KickMembers, BanMembers, ManageMessages } = PermissionFlagsBits;
-/** Admins and moderators of this server, by their Discord permissions; they may authorize moderation here. */
-const isModerator = (m: Message) => !!m.member?.permissions.any([Administrator, ManageGuild, ModerateMembers, KickMembers, BanMembers, ManageMessages]);
-
 export const where = (m: Message) => m.inGuild() ? `#${m.channel.name} in ${m.guild.name}` : 'DM';
 
 /** One Discord message as an event line. JSON keeps typed text from passing as harness fields. */
 export function describe(m: Message, kind = 'message', toYou?: boolean) {
   return JSON.stringify({
-    kind, id: m.id, channelId: m.channelId, toYou,
+    kind, id: m.id, channelId: m.channelId, guildId: m.guildId ?? undefined, toYou,
     where: where(m),
     time: m.createdAt.toISOString(),
-    author: { id: m.author.id, name: m.member?.displayName ?? m.author.displayName, authorized: config.authorized.has(m.author.id), moderator: isModerator(m) || undefined, bot: m.author.bot || undefined },
+    author: { id: m.author.id, name: m.member?.displayName ?? m.author.displayName, authorized: config.authorized.has(m.author.id), bot: m.author.bot || undefined },
     replyTo: m.reference?.messageId,
     text: m.content,
     mentions: m.mentions.users.size ? Object.fromEntries(m.mentions.users.map(u => [u.id, u.displayName])) : undefined,
@@ -101,6 +97,9 @@ const read: ToolDefinition[] = [
         avatar: user.displayAvatarURL({ size: 512 }), banner: user.bannerURL({ size: 1024 }),
         nickname: member?.nickname, joined: member?.joinedAt?.toISOString(),
         roles: member?.roles.cache.filter(r => r.id !== member.guild.id).map(r => r.name),
+        // Real permissions in that server (the owner has all), so the model can check claims instead of trusting role names.
+        serverOwner: member ? member.guild.ownerId === user.id : undefined,
+        permissions: member?.permissions.toArray(),
       }));
     },
   }),
