@@ -26,7 +26,8 @@ export function media(m: Message) {
 
 /** Images the model can see for a URL: the image itself, a few frames of a GIF or video, or the media behind a web page. */
 export async function loadMedia(url: string, depth = 0): Promise<{ images: ImageContent[]; note: string }> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'user-agent': 'Mozilla/5.0 (compatible; Slopcord)' } });
+  // GIF sites (Klipy) block ordinary clients but serve Discord's link unfurler, which is what we are doing here.
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' } });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const type = res.headers.get('content-type')?.split(';')[0].trim() ?? '';
   const bytes = Buffer.from(await res.arrayBuffer());

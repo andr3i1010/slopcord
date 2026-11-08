@@ -10,11 +10,11 @@ declare module '@sapphire/framework' {
   interface Preconditions { OwnerOnly: never }
 }
 
-type Batch = { lines: string[]; images: ImageContent[]; pending: string[]; last: string; first: number; timer?: NodeJS.Timeout };
+type Batch = { lines: (string | (() => string))[]; images: ImageContent[]; pending: string[]; last: string; first: number; timer?: NodeJS.Timeout };
 const buffers = new Map<string, Batch>();
 
 // Chatter is batched per channel (4s of quiet, 15s at most) so a burst is one model call. Pings flush at once.
-function queue(m: { id: string; channelId: string }, line: string, opts: { urgent?: boolean; images?: ImageContent[]; pending?: boolean } = {}) {
+function queue(m: { id: string; channelId: string }, line: string | (() => string), opts: { urgent?: boolean; images?: ImageContent[]; pending?: boolean } = {}) {
   const b = buffers.get(m.channelId) ?? { lines: [], images: [], pending: [], last: m.id, first: Date.now() };
   buffers.set(m.channelId, b);
   clearTimeout(b.timer);
@@ -22,7 +22,7 @@ function queue(m: { id: string; channelId: string }, line: string, opts: { urgen
   b.images.push(...opts.images ?? []);
   if (opts.pending) b.pending.push(m.id);
   b.last = m.id;
-  const flush = () => { buffers.delete(m.channelId); brain.deliver(b.lines.join('\n'), b.images, !!opts.urgent, b.pending, { channelId: m.channelId, messageId: b.last }); };
+  const flush = () => { buffers.delete(m.channelId); brain.deliver(b.lines.map(l => typeof l === 'string' ? l : l()).join('\n'), b.images, !!opts.urgent, b.pending, { channelId: m.channelId, messageId: b.last }); };
   if (opts.urgent) flush();
   else b.timer = setTimeout(flush, Math.min(4000, b.first + 15_000 - Date.now()));
 }
@@ -32,10 +32,12 @@ async function onMessage(m: Message, kind = 'message') {
   if (m.author.id === me) return;
   // Every message reaches the model, which decides whether to answer. Pings only get liveness and priority.
   const ping = !m.author.bot && (!m.inGuild() || m.mentions.users.has(me) || m.mentions.repliedUser?.id === me);
-  if (!ping) return queue(m, describe(m, kind));
+  // Described at flush time: Discord adds link embeds (GIFs) a moment after the message, as an update.
+  if (!ping) return queue(m, () => describe(m, kind));
   brain.addPending(m.channelId, m.id);
   // People don't ack every ping; 👀 only shows up when the answer is slow.
   setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
+  if (/https?:\/\//.test(m.content) && !m.embeds.length) await new Promise(r => setTimeout(r, 1500));
   // Media sent to the bot is seen right away (emojis aside, they're cheap to open on demand).
   const seen = await Promise.all(media(m).filter(x => x.kind !== 'emoji').map(x => loadMedia(x.url).catch(() => undefined)));
   queue(m, describe(m, kind, true), { urgent: true, images: seen.flatMap(s => s?.images ?? []).slice(0, 8), pending: true });
