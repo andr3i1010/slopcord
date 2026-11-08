@@ -64,7 +64,8 @@ function addWake(ms: number, why: string) {
 export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
   gate = gate.then(async () => {
     const key = target?.channelId ?? '';
-    if (running !== undefined && running !== key) return void waiting.push({ lines, images, urgent, ids, target });
+    // Other channels wait, and so do further pings: one ping per turn, so each gets its own reply.
+    if (running !== undefined && (running !== key || ids.length)) return void waiting.push({ lines, images, urgent, ids, target });
     await compacting;
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
@@ -107,11 +108,11 @@ function settle(aborted: boolean) {
   }
 }
 
-/** Next waiting channel (pings first), with everything that piled up for it merged into one batch. */
+/** Next waiting batch: pings first and one at a time; chatter that piled up for a channel is merged. */
 function pump() {
-  const next = waiting.find(b => b.urgent) ?? waiting[0];
+  const next = waiting.find(b => b.ids.length) ?? waiting[0];
   if (!next) return;
-  const same = waiting.filter(b => b.target?.channelId === next.target?.channelId);
+  const same = next.ids.length ? [next] : waiting.filter(b => !b.ids.length && b.target?.channelId === next.target?.channelId);
   waiting = waiting.filter(b => !same.includes(b));
   deliver(same.map(b => b.lines).join('\n'), same.flatMap(b => b.images), same.some(b => b.urgent), same.flatMap(b => b.ids), same.at(-1)!.target);
 }
@@ -147,7 +148,7 @@ function onEvent(e: AgentSessionEvent) {
 const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
 export const isPending = (messageId: string) => pending.has(messageId);
 
-/** Post the way a person would: separate thoughts as separate short messages. Plain messages; quoting is send's replyTo. */
+/** Post the way a person would: separate thoughts as separate short messages. An answer to a ping replies to it (not in DMs). */
 async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
@@ -156,7 +157,8 @@ async function speak(said: string, target: Pending, pinged: boolean) {
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
     for (const [i, part] of (chatty ? thoughts.map(content => ({ content })) : outgoing(said)).entries()) {
       if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.content.length * 20, 3000))); }
-      await c.send(part);
+      const reply = i === 0 && pinged && !c.isDMBased() ? { messageReference: target.messageId, failIfNotExists: false } : undefined;
+      await c.send({ ...part, reply });
     }
   } catch (error) { await report(error, pinged ? [target] : []); }
 }

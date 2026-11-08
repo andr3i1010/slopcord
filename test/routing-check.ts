@@ -3,14 +3,15 @@
 import assert from 'node:assert/strict';
 import { container } from '@sapphire/framework';
 
-const sent: { channel: string; text: string }[] = [];
+const sent: { channel: string; text: string; replyTo?: string }[] = [];
 const message = (channelId: string, id: string) => ({
   id, channelId,
   reactions: { resolve: () => undefined }, react: async () => {}, reply: async () => ({ id: 'r' }),
 });
 const channel = (id: string) => ({
   id, lastMessageId: undefined, isSendable: () => true, sendTyping: async () => {},
-  send: async (o: any) => { sent.push({ channel: id, text: typeof o === 'string' ? o : o.content }); return { id: `s${sent.length}` }; },
+  isDMBased: () => false,
+  send: async (o: any) => { sent.push({ channel: id, text: typeof o === 'string' ? o : o.content, replyTo: o.reply?.messageReference }); return { id: `s${sent.length}` }; },
   messages: { fetch: async (mid: string) => message(id, mid) },
 });
 (container as any).client = {
@@ -29,10 +30,20 @@ await new Promise(r => setTimeout(r, 300));
 brain.addPending('B', 'b1');
 brain.deliver(event('B', 'b1', '<@999> what is 2+2? just the number', true), [], true, ['b1'], { channelId: 'B', messageId: 'b1' });
 
-for (let s = 0; s < 120 && !(sent.some(m => m.channel === 'B') && brain.status().includes('\nidle')); s++) await new Promise(r => setTimeout(r, 1000));
+// Two pings right after each other in one channel (the doodles + kingissuper case): one reply each.
+brain.addPending('C', 'c1');
+brain.deliver(event('C', 'c1', '<@999> what is 3+3? just the number', true), [], true, ['c1'], { channelId: 'C', messageId: 'c1' });
+await new Promise(r => setTimeout(r, 200));
+brain.addPending('C', 'c2');
+brain.deliver(event('C', 'c2', '<@999> capital of France? one word', true), [], true, ['c2'], { channelId: 'C', messageId: 'c2' });
+
+for (let s = 0; s < 180 && !(sent.some(m => m.replyTo === 'c2') && brain.status().includes('\nidle')); s++) await new Promise(r => setTimeout(r, 1000));
 console.log(sent);
-assert.ok(sent.some(m => m.channel === 'B' && m.text.includes('4')), 'the ping in B was not answered in B');
+assert.ok(sent.some(m => m.channel === 'B' && m.text.includes('4') && m.replyTo === 'b1'), 'the ping in B was not answered in B as a reply to it');
+assert.ok(!sent.some(m => m.channel === 'A' && m.replyTo), 'a chatter answer was sent as a reply');
 assert.ok(!sent.some(m => m.channel === 'B' && /inkscape|export|svg/i.test(m.text)), "A's answer landed in B");
 assert.ok(!sent.some(m => m.channel === 'A' && /^\s*4\s*$/.test(m.text)), "B's answer landed in A");
+assert.ok(sent.some(m => m.replyTo === 'c1' && m.text.includes('6') && !/paris/i.test(m.text)), 'first ping did not get its own reply');
+assert.ok(sent.some(m => m.replyTo === 'c2' && /paris/i.test(m.text) && !m.text.includes('6')), 'second ping did not get its own reply');
 console.log('routing OK');
 process.exit(0);
