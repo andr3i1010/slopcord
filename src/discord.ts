@@ -3,7 +3,8 @@ import { Command, container, Listener, Precondition, SapphireClient, Events as S
 import { Events, GatewayIntentBits, MessageFlags, Partials, type Message, type MessageReaction, type PartialMessage, type PartialMessageReaction, type PartialUser, type User } from 'discord.js';
 import * as brain from './brain.ts';
 import { config } from './config.ts';
-import { describe, fetchImage, where } from './tools.ts';
+import { loadMedia, media } from './media.ts';
+import { describe, where } from './tools.ts';
 
 declare module '@sapphire/framework' {
   interface Preconditions { OwnerOnly: never }
@@ -35,8 +36,9 @@ async function onMessage(m: Message, kind = 'message') {
   brain.addPending(m.channelId, m.id);
   // People don't ack every ping; 👀 only shows up when the answer is slow.
   setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
-  const images = await Promise.all(m.attachments.filter(a => !!a.contentType?.startsWith('image/')).map(a => fetchImage(a.url).catch(() => undefined)));
-  queue(m, describe(m, kind, true), { urgent: true, images: images.filter(i => i !== undefined), pending: true });
+  // Media sent to the bot is seen right away (emojis aside, they're cheap to open on demand).
+  const seen = await Promise.all(media(m).filter(x => x.kind !== 'emoji').map(x => loadMedia(x.url).catch(() => undefined)));
+  queue(m, describe(m, kind, true), { urgent: true, images: seen.flatMap(s => s?.images ?? []).slice(0, 8), pending: true });
 }
 
 async function onEdit(old: Message | PartialMessage, m: Message | PartialMessage) {

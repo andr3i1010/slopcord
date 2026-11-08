@@ -1,12 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import type { ImageContent } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
 import type { Message } from 'discord.js';
 import { Type } from 'typebox';
 import { config, leaksSecret, redact } from './config.ts';
+import { loadMedia, media } from './media.ts';
 
 export const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }], details: undefined });
 
@@ -30,19 +30,11 @@ export function describe(m: Message, kind = 'message', toYou?: boolean) {
     replyTo: m.reference?.messageId,
     text: m.content,
     mentions: m.mentions.users.size ? Object.fromEntries(m.mentions.users.map(u => [u.id, u.displayName])) : undefined,
-    attachments: m.attachments.size ? m.attachments.map(a => ({ name: a.name, type: a.contentType, url: a.url })) : undefined,
+    media: media(m).length ? media(m) : undefined,
     edited: m.editedAt?.toISOString(),
   });
 }
 
-export async function fetchImage(url: string): Promise<ImageContent> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-  const type = res.headers.get('content-type')?.split(';')[0] ?? '';
-  if (!res.ok || !type.startsWith('image/')) throw new Error(`Not an image: HTTP ${res.status} ${type}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > 8 << 20) throw new Error('Image is over 8 MiB.');
-  return { type: 'image', data: bytes.toString('base64'), mimeType: type };
-}
 
 // shortcut: cuts at the last newline before 2000 chars, can split a code block; smarter splitting if that bites.
 type FileSpec = { name: string; path?: string; url?: string; text?: string };
@@ -86,9 +78,13 @@ const read: ToolDefinition[] = [
     },
   }),
   defineTool({
-    name: 'view_image', label: 'View image', description: 'Look at an image by URL (attachments, avatars, banners).',
+    name: 'view_media', label: 'View media',
+    description: 'Look at an image, GIF, video, sticker, custom emoji, avatar, or a media link (Tenor, Klipy, Giphy, YouTube pages work too). GIFs and videos come back as a few frames spread over their length; there is no audio.',
     parameters: Type.Object({ url: Type.String() }),
-    async execute(_id, p) { return { content: [await fetchImage(p.url)], details: undefined }; },
+    async execute(_id, p) {
+      const { images, note } = await loadMedia(p.url);
+      return { content: [{ type: 'text', text: note }, ...images], details: undefined };
+    },
   }),
   defineTool({
     name: 'profile', label: 'Profile', description: "A user's profile; with guildId also their nickname, roles and join date there.",
