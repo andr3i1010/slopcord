@@ -8,4 +8,5 @@ RUN npm ci --ignore-scripts --omit=dev
 COPY . .
 # Notes, sessions and timers live on a volume mounted here.
 ENV DATA_DIR=/data
-CMD ["node", "src/index.ts"]
+# HOLD=1 keeps the container up without starting the bot, e.g. to restore /data from a backup through the shell.
+CMD ["sh", "-c", "if [ -n \"$HOLD\" ]; then exec sleep infinity; fi; exec node src/index.ts"]
