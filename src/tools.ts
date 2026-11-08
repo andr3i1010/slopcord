@@ -102,7 +102,8 @@ const read: ToolDefinition[] = [
   }),
 ];
 
-const write: ToolDefinition[] = [
+/** `replyDefault` lets the brain make the first message answering a ping a reply to it. */
+const write = (replyDefault?: (channelId: string) => string | undefined): ToolDefinition[] => [
   defineTool({
     name: 'send', label: 'Send', description: 'Post a message in a channel or DM. This is the only way to talk; not calling it means staying silent. Long text is split automatically.',
     parameters: Type.Object({
@@ -118,11 +119,12 @@ const write: ToolDefinition[] = [
     async execute(_id, p) {
       const c = await channel(p.channelId);
       const files = await Promise.all((p.files ?? []).map(async f => ({ name: f.name, attachment: await fileBytes(f) })));
+      const replyTo = p.replyTo ?? replyDefault?.(p.channelId);
       const messages = outgoing(redact(p.text));
       const sent: string[] = [];
       for (const [i, msg] of messages.entries()) {
         const last = i === messages.length - 1;
-        const m = await c.send({ content: msg.content, files: [...msg.files ?? [], ...last ? files : []], reply: i === 0 && p.replyTo ? { messageReference: p.replyTo, failIfNotExists: false } : undefined });
+        const m = await c.send({ content: msg.content, files: [...msg.files ?? [], ...last ? files : []], reply: i === 0 && replyTo ? { messageReference: replyTo, failIfNotExists: false } : undefined });
         sent.push(m.id);
       }
       return text(`sent ${sent.join(', ')}`);
@@ -166,4 +168,5 @@ function discordApi(readOnly: boolean) {
   });
 }
 
-export const discordTools = (readOnly: boolean) => [...read, ...(readOnly ? [] : write), discordApi(readOnly)];
+export const discordTools = (readOnly: boolean, replyDefault?: (channelId: string) => string | undefined) =>
+  [...read, ...(readOnly ? [] : write(replyDefault)), discordApi(readOnly)];

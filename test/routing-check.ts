@@ -37,7 +37,13 @@ await new Promise(r => setTimeout(r, 200));
 brain.addPending('C', 'c2');
 brain.deliver(event('C', 'c2', '<@999> capital of France? one word', true), [], true, ['c2'], { channelId: 'C', messageId: 'c2' });
 
-for (let s = 0; s < 180 && !(sent.some(m => m.replyTo === 'c2') && brain.status().includes('\nidle')); s++) await new Promise(r => setTimeout(r, 1000));
+// A busy chat: a question to the bot by name, then unrelated chatter. The answer should reply to the question.
+const say = (id: string, name: string, text: string, replyTo?: string) =>
+  JSON.stringify({ kind: 'message', id, channelId: 'D', where: '#D in Test', author: { id: name, name, authorized: false }, replyTo, text });
+brain.deliver([say('d1', 'sam', 'TestBot is het waar dat water op 100 graden kookt?'), say('d2', 'kim', 'lol', 'd1'), say('d3', 'lee', 'wie wil er later minecraft spelen')].join('\n'),
+  [], false, [], { channelId: 'D', messageId: 'd3' });
+
+for (let s = 0; s < 180 && !(sent.some(m => m.channel === 'D') && sent.some(m => m.replyTo === 'c2') && brain.status().includes('\nidle')); s++) await new Promise(r => setTimeout(r, 1000));
 console.log(sent);
 assert.ok(sent.some(m => m.channel === 'B' && m.text.includes('4') && m.replyTo === 'b1'), 'the ping in B was not answered in B as a reply to it');
 assert.ok(!sent.some(m => m.channel === 'A' && m.replyTo), 'a chatter answer was sent as a reply');
@@ -45,5 +51,6 @@ assert.ok(!sent.some(m => m.channel === 'B' && /inkscape|export|svg/i.test(m.tex
 assert.ok(!sent.some(m => m.channel === 'A' && /^\s*4\s*$/.test(m.text)), "B's answer landed in A");
 assert.ok(sent.some(m => m.replyTo === 'c1' && m.text.includes('6') && !/paris/i.test(m.text)), 'first ping did not get its own reply');
 assert.ok(sent.some(m => m.replyTo === 'c2' && /paris/i.test(m.text) && !m.text.includes('6')), 'second ping did not get its own reply');
+assert.ok(sent.some(m => m.channel === 'D' && m.replyTo === 'd1'), "busy chat: the answer to sam didn't reply to sam's message");
 console.log('routing OK');
 process.exit(0);

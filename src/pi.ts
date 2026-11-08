@@ -65,5 +65,11 @@ export async function makeSession(prompt: string, tools: ToolDefinition[], sessi
   return session;
 }
 
+/** A one-off question to the model, outside any session. */
+export async function ask(question: string) {
+  const reply = await runtime.completeSimple(model!, { messages: [{ role: 'user', content: question, timestamp: Date.now() }] });
+  return reply.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('');
+}
+
 export const lastReply = (session: AgentSession) =>
   session.messages.findLast((m): m is AssistantMessage => m.role === 'assistant');
