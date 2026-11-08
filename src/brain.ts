@@ -147,7 +147,7 @@ function onEvent(e: AgentSessionEvent) {
 const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
 export const isPending = (messageId: string) => pending.has(messageId);
 
-/** Post the way a person would: separate thoughts as separate short messages, quoting only when the chat moved on. */
+/** Post the way a person would: separate thoughts as separate short messages. Plain messages; quoting is send's replyTo. */
 async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
@@ -156,8 +156,7 @@ async function speak(said: string, target: Pending, pinged: boolean) {
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
     for (const [i, part] of (chatty ? thoughts.map(content => ({ content })) : outgoing(said)).entries()) {
       if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.content.length * 20, 3000))); }
-      const quote = i === 0 && c.lastMessageId !== target.messageId;
-      await c.send({ ...part, reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
+      await c.send(part);
     }
   } catch (error) { await report(error, pinged ? [target] : []); }
 }
