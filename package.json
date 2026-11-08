@@ -10,7 +10,8 @@
     "start": "node src/index.ts",
     "check": "tsc --noEmit",
     "smoke": "node test/smoke.ts",
-    "upload-check": "node test/upload-check.ts"
+    "upload-check": "node test/upload-check.ts",
+    "mcp-check": "node test/mcp-check.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",

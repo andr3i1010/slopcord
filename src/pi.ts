@@ -10,6 +10,8 @@ import type { User } from 'discord.js';
 import { config, redact, root } from './config.ts';
 
 const agentDir = resolve(root, 'pi');
+// The MCP extension reads mcp.json from this variable, not from the agentDir passed in; unset, it falls back to ~/.pi/agent.
+process.env.PI_CODING_AGENT_DIR = agentDir;
 const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
 runtime.registerProvider('slopcord', {
   baseUrl: config.baseUrl, api: 'openai-completions',
