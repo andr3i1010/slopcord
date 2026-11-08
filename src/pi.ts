@@ -17,7 +17,8 @@ runtime.registerProvider('slopcord', {
   baseUrl: config.baseUrl, api: 'openai-completions',
   models: [{
     id: config.model, name: config.model, reasoning: false, input: ['text', 'image'],
-    contextWindow: config.contextWindow, maxTokens: config.maxTokens,
+    // No output cap of our own: Pi limits each request to the room left in the context window.
+    contextWindow: config.contextWindow, maxTokens: config.contextWindow,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     promptCache: { short: 300 },
   }],

@@ -41,8 +41,9 @@ async function onMessage(m: Message) {
 
 async function onEdit(old: Message | PartialMessage, m: Message | PartialMessage) {
   const full = m.partial ? await m.fetch() : m;
-  // Embed unfurls also fire updates; only real text edits matter.
-  if (full.author.id === full.client.user.id || old.content === full.content) return;
+  // Pins, embed unfurls and old uncached messages also fire updates; only fresh text edits matter.
+  const fresh = Date.now() - (full.editedTimestamp ?? 0) < 60_000;
+  if (full.author.id === full.client.user.id || !fresh || old.content === full.content) return;
   queue(full, describe(full, 'edit'));
 }
 

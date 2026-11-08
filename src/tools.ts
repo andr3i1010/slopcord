@@ -56,7 +56,7 @@ async function fileBytes(f: FileSpec) {
   return bytes;
 }
 
-export function split(t: string) {
+function split(t: string) {
   const out: string[] = [];
   while (t.length > 2000) {
     const cut = t.lastIndexOf('\n', 2000) > 1000 ? t.lastIndexOf('\n', 2000) : 2000;
@@ -64,6 +64,12 @@ export function split(t: string) {
     t = t.slice(cut);
   }
   return [...out, t];
+}
+
+/** Discord messages for a text. Output is uncapped, so a wall of text goes out as an excerpt plus the full text as a file. */
+export function outgoing(t: string): { content: string; files?: { attachment: Buffer; name: string }[] }[] {
+  if (t.length <= 8000) return split(t).map(content => ({ content }));
+  return [{ content: `${t.slice(0, 1500).trimEnd()}…\n-# full text attached`, files: [{ attachment: Buffer.from(t), name: 'reply.md' }] }];
 }
 
 const ids = { channelId: Type.String(), messageId: Type.String() };
@@ -114,11 +120,11 @@ const write: ToolDefinition[] = [
     async execute(_id, p) {
       const c = await channel(p.channelId);
       const files = await Promise.all((p.files ?? []).map(async f => ({ name: f.name, attachment: await fileBytes(f) })));
-      const chunks = split(redact(p.text));
+      const messages = outgoing(redact(p.text));
       const sent: string[] = [];
-      for (const [i, content] of chunks.entries()) {
-        const last = i === chunks.length - 1;
-        const m = await c.send({ content, files: last ? files : [], reply: i === 0 && p.replyTo ? { messageReference: p.replyTo, failIfNotExists: false } : undefined });
+      for (const [i, msg] of messages.entries()) {
+        const last = i === messages.length - 1;
+        const m = await c.send({ content: msg.content, files: [...msg.files ?? [], ...last ? files : []], reply: i === 0 && p.replyTo ? { messageReference: p.replyTo, failIfNotExists: false } : undefined });
         sent.push(m.id);
       }
       return text(`sent ${sent.join(', ')}`);

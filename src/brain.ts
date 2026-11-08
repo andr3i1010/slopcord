@@ -7,7 +7,7 @@ import { Type } from 'typebox';
 import { chain, config, localTime, redact } from './config.ts';
 import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
-import { channel, describe, discordTools, fetchMessage, split, text } from './tools.ts';
+import { channel, describe, discordTools, fetchMessage, outgoing, text } from './tools.ts';
 import { workerList, workerTools } from './workers.ts';
 
 const STALL_MS = 3 * 60_000;
@@ -27,7 +27,7 @@ let session: AgentSession;
 const pending = new Map<string, Pending>(load<Pending[]>('pending.json', []).map(p => [p.messageId, { ...p, delivered: false }]));
 let wakes = load<Wake[]>('wakes.json', []);
 let gate: Promise<unknown> = Promise.resolve();
-let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {};
+let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {}, compactingNow = false;
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
 let failure: Error | undefined;
 let sentTo = new Set<string>(), lastTarget: Pending | undefined;
@@ -112,9 +112,10 @@ function onEvent(e: AgentSessionEvent) {
     lastTool = `${e.toolName} ${JSON.stringify(e.args)}`.slice(0, 4000);
     if (e.toolName === 'send') sentTo.add(e.args?.channelId);
   }
-  else if (e.type === 'compaction_start') compacting = new Promise(done => (endCompaction = done));
+  else if (e.type === 'compaction_start') { compactingNow = true; compacting = new Promise(done => (endCompaction = done)); }
   else if (e.type === 'compaction_end') {
     endCompaction();
+    compactingNow = false;
     indexShown = '';
     nudged = false;
     if (e.errorMessage && !e.willRetry) void report(new Error(`compaction failed: ${e.errorMessage}`));
@@ -128,12 +129,13 @@ export const isPending = (messageId: string) => pending.has(messageId);
 async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
+    said = redact(said);
     const thoughts = said.split(/\n\s*\n/);
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
-    for (const [i, part] of (chatty ? thoughts : split(said)).entries()) {
-      if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.length * 20, 3000))); }
+    for (const [i, part] of (chatty ? thoughts.map(content => ({ content })) : outgoing(said)).entries()) {
+      if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.content.length * 20, 3000))); }
       const quote = i === 0 && c.lastMessageId !== target.messageId;
-      await c.send({ content: redact(part), reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
+      await c.send({ ...part, reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
     }
   } catch (error) { await report(error, pinged ? [target] : []); }
 }
@@ -174,7 +176,8 @@ function tick() {
   if (session.isStreaming) {
     const channels = new Set([...pending.values()].filter(p => p.delivered).map(p => p.channelId));
     for (const id of channels) typing(id);
-    if (now - lastActivity > STALL_MS && !failure) {
+    // Compaction is silent while it writes the summary, which can take minutes; that isn't a stall.
+    if (now - lastActivity > STALL_MS && !failure && !compactingNow) {
       failure = new Error(`stalled: no model or tool activity for ${STALL_MS / 60_000} minutes`);
       void session.abort();
     }
