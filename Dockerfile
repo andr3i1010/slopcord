@@ -1,7 +1,7 @@
-FROM node:22-bookworm-slim
-# ffmpeg: GIF/video frames for vision. git, curl, python3: the model's shell tools.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg git curl ca-certificates python3 \
-  && rm -rf /var/lib/apt/lists/*
+# Alpine: Debian's ffmpeg pulls 234 packages, which takes 10+ minutes in Orchard's builder, and it builds without cache.
+FROM node:22-alpine
+# ffmpeg: GIF/video frames for vision. bash, git, curl, python3, openssl: the model's shell tools (and restoring backups).
+RUN apk add --no-cache ffmpeg bash git curl python3 openssl
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --omit=dev
