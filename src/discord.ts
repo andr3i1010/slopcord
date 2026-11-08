@@ -20,7 +20,7 @@ function queue(channelId: string, line: string, urgent = false, images: ImageCon
   b.lines.push(line);
   b.images.push(...images);
   if (id) b.ids.push(id);
-  const flush = () => { buffers.delete(channelId); brain.deliver(b.lines.join('\n'), b.images, urgent, b.ids); };
+  const flush = () => { buffers.delete(channelId); brain.deliver(b.lines.join('\n'), b.images, urgent, b.ids, channelId); };
   if (urgent) flush();
   else b.timer = setTimeout(flush, Math.min(4000, b.first + 15_000 - Date.now()));
 }

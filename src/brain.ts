@@ -7,7 +7,7 @@ import { Type } from 'typebox';
 import { chain, config, localTime, redact } from './config.ts';
 import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
-import { describe, discordTools, fetchMessage, text } from './tools.ts';
+import { channel, describe, discordTools, fetchMessage, split, text } from './tools.ts';
 import { workerList, workerTools } from './workers.ts';
 
 const STALL_MS = 3 * 60_000;
@@ -30,6 +30,7 @@ let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {};
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
 let failure: Error | undefined;
+let sentTo = new Set<string>(), lastChannel: string | undefined;
 const recentDms = new Map<string, number>();
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
@@ -56,7 +57,7 @@ function addWake(ms: number, why: string) {
  * (`steer` lands after the current tool call, `followUp` after the run). The gate keeps two deliveries
  * from racing into two runs.
  */
-export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = []) {
+export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], channelId?: string) {
   gate = gate.then(async () => {
     await compacting;
     const index = memoryIndex();
@@ -69,6 +70,7 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
+          if (channelId) lastChannel = channelId;
           accepted();
         },
       }).catch(err => { void report(err, take(ids)); accepted(); });
@@ -84,6 +86,13 @@ function settle(aborted: boolean) {
   const done = take([...pending.values()].filter(p => p.delivered).map(p => p.messageId));
   if (err) void report(err, done, errored ? last : undefined);
   else for (const p of done) void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
+  // Final text is speech: a reply to the waiting mention, else a message where the latest event happened.
+  const said = !err && last && last.timestamp >= runStarted && last.stopReason === 'stop'
+    ? last.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim() : '';
+  const target = done.findLast(p => !sentTo.has(p.channelId)) ?? (lastChannel && !sentTo.has(lastChannel) ? lastChannel : undefined);
+  if (said && target) void speak(said, target);
+  sentTo = new Set();
+  lastChannel = undefined;
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
   const usage = session.getContextUsage();
   if (!nudged && (usage?.percent ?? 0) > 75) {
@@ -95,7 +104,10 @@ function settle(aborted: boolean) {
 function onEvent(e: AgentSessionEvent) {
   lastActivity = Date.now();
   if (e.type === 'agent_start') runStarted = lastActivity;
-  else if (e.type === 'tool_execution_start') lastTool = `${e.toolName} ${JSON.stringify(e.args)}`.slice(0, 4000);
+  else if (e.type === 'tool_execution_start') {
+    lastTool = `${e.toolName} ${JSON.stringify(e.args)}`.slice(0, 4000);
+    if (e.toolName === 'send') sentTo.add(e.args?.channelId);
+  }
   else if (e.type === 'compaction_start') compacting = new Promise(done => (endCompaction = done));
   else if (e.type === 'compaction_end') {
     endCompaction();
@@ -103,6 +115,13 @@ function onEvent(e: AgentSessionEvent) {
     nudged = false;
     if (e.errorMessage && !e.willRetry) void report(new Error(`compaction failed: ${e.errorMessage}`));
   } else if (e.type === 'agent_settled') settle(e.aborted);
+}
+
+async function speak(said: string, target: Pending | string) {
+  try {
+    const to = typeof target === 'string' ? await channel(target) : await fetchMessage(target.channelId, target.messageId);
+    for (const chunk of split(redact(said))) await (typeof target === 'string' ? (to as Awaited<ReturnType<typeof channel>>).send(chunk) : (to as Awaited<ReturnType<typeof fetchMessage>>).reply(chunk));
+  } catch (error) { await report(error, typeof target === 'string' ? [] : [target]); }
 }
 
 /** ⚠️ plus the full trace on the messages that were waiting; anything else goes to the owner's DMs. */
@@ -174,7 +193,7 @@ export async function start() {
   setInterval(tick, 8000);
   for (const p of [...pending.values()]) {
     const m = await fetchMessage(p.channelId, p.messageId).catch(() => undefined);
-    if (m) deliver(describe(m), [], true, [m.id]);
+    if (m) deliver(describe(m), [], true, [m.id], m.channelId);
     else take([p.messageId]);
   }
 }

@@ -8,7 +8,7 @@ import { config, redact } from './config.ts';
 
 export const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }], details: undefined });
 
-async function channel(id: string) {
+export async function channel(id: string) {
   const c = await container.client.channels.fetch(id);
   if (!c?.isSendable()) throw new Error(`Channel ${id} is not a text channel I can use.`);
   return c;
@@ -41,7 +41,7 @@ export async function fetchImage(url: string): Promise<ImageContent> {
 }
 
 // shortcut: cuts at the last newline before 2000 chars, can split a code block; smarter splitting if that bites.
-function split(t: string) {
+export function split(t: string) {
   const out: string[] = [];
   while (t.length > 2000) {
     const cut = t.lastIndexOf('\n', 2000) > 1000 ? t.lastIndexOf('\n', 2000) : 2000;
