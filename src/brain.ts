@@ -30,7 +30,7 @@ let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {};
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
 let failure: Error | undefined;
-let sentTo = new Set<string>(), lastChannel: string | undefined;
+let sentTo = new Set<string>();
 const recentDms = new Map<string, number>();
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
@@ -70,7 +70,6 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
-          if (channelId) lastChannel = channelId;
           if (ids.length && channelId) typing(channelId);
           accepted();
         },
@@ -87,15 +86,14 @@ function settle(aborted: boolean) {
   const done = take([...pending.values()].filter(p => p.delivered).map(p => p.messageId));
   if (err) void report(err, done, errored ? last : undefined);
   else for (const p of done) void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
-  // Final text is speech: a reply to the waiting mention, else a message where the latest event happened.
+  // Final text answers a waiting mention or DM. In plain chatter it's private: models think out loud there.
   const said = !err && last && last.timestamp >= runStarted && last.stopReason === 'stop'
     ? last.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim() : '';
-  const target = done.findLast(p => !sentTo.has(p.channelId)) ?? (lastChannel && !sentTo.has(lastChannel) ? lastChannel : undefined);
-  // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a lone stage direction is never chat.
-  const silent = /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(said);
+  const target = done.findLast(p => !sentTo.has(p.channelId));
+  // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a stage-direction line is never chat.
+  const silent = said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
   if (said && !silent && target) void speak(said, target);
   sentTo = new Set();
-  lastChannel = undefined;
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
   const usage = session.getContextUsage();
   if (!nudged && (usage?.percent ?? 0) > 75) {
@@ -124,17 +122,17 @@ const typing = (channelId: string) => void channel(channelId).then(c => c.sendTy
 export const isPending = (messageId: string) => pending.has(messageId);
 
 /** Post the way a person would: separate thoughts as separate short messages, quoting only when the chat moved on. */
-async function speak(said: string, target: Pending | string) {
+async function speak(said: string, target: Pending) {
   try {
-    const c = await channel(typeof target === 'string' ? target : target.channelId);
+    const c = await channel(target.channelId);
     const thoughts = said.split(/\n\s*\n/);
     const chatty = thoughts.length <= 4 && !said.includes('```') && thoughts.every(t => t.length < 300);
     for (const [i, part] of (chatty ? thoughts : split(said)).entries()) {
       if (i) { await c.sendTyping(); await new Promise(r => setTimeout(r, Math.min(600 + part.length * 20, 3000))); }
-      const quote = i === 0 && typeof target !== 'string' && c.lastMessageId !== target.messageId;
+      const quote = i === 0 && c.lastMessageId !== target.messageId;
       await c.send({ content: redact(part), reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
     }
-  } catch (error) { await report(error, typeof target === 'string' ? [] : [target]); }
+  } catch (error) { await report(error, [target]); }
 }
 
 /** ⚠️ plus the full trace on the messages that were waiting; anything else goes to the owner's DMs. */

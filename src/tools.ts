@@ -1,10 +1,12 @@
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
 import type { Message } from 'discord.js';
 import { Type } from 'typebox';
-import { config, redact } from './config.ts';
+import { config, leaksSecret, redact } from './config.ts';
 
 export const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }], details: undefined });
 
@@ -41,6 +43,19 @@ export async function fetchImage(url: string): Promise<ImageContent> {
 }
 
 // shortcut: cuts at the last newline before 2000 chars, can split a code block; smarter splitting if that bites.
+type FileSpec = { name: string; path?: string; url?: string; text?: string };
+
+/** Upload bytes, checked so no file (or .gz/.tgz of the repo) carries the bot's own secrets out. */
+async function fileBytes(f: FileSpec) {
+  if (f.text !== undefined) return Buffer.from(redact(f.text));
+  const bytes = f.path ? await readFile(resolve(config.dataDir, f.path)) : Buffer.from(await (await fetch(f.url ?? '')).arrayBuffer());
+  let plain = bytes;
+  try { plain = gunzipSync(bytes); } catch {}
+  // shortcut: zip/xz/7z archives aren't unpacked for this check; add them if the bot starts making those.
+  if (leaksSecret(bytes) || leaksSecret(plain)) throw new Error("That file contains the bot's own secrets; refusing to upload it.");
+  return bytes;
+}
+
 export function split(t: string) {
   const out: string[] = [];
   while (t.length > 2000) {
@@ -98,7 +113,7 @@ const write: ToolDefinition[] = [
     }),
     async execute(_id, p) {
       const c = await channel(p.channelId);
-      const files = (p.files ?? []).map(f => ({ name: f.name, attachment: f.text !== undefined ? Buffer.from(redact(f.text)) : f.path ? resolve(config.dataDir, f.path) : f.url ?? '' }));
+      const files = await Promise.all((p.files ?? []).map(async f => ({ name: f.name, attachment: await fileBytes(f) })));
       const chunks = split(redact(p.text));
       const sent: string[] = [];
       for (const [i, content] of chunks.entries()) {

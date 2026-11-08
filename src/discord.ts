@@ -84,6 +84,8 @@ export const client = new SapphireClient({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel, Partials.Message],
   loadMessageCommandListeners: false,
+  // Pi swaps in a newer Undici globally; discord.js's bundled one then rejects multipart uploads ("FormData from other sources").
+  rest: { makeRequest: fetch as never },
 });
 
 // Node runs our .ts files natively, which Sapphire's directory scan doesn't detect, so pieces are registered by hand.

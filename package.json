@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/index.ts",
     "check": "tsc --noEmit",
-    "smoke": "node test/smoke.ts"
+    "smoke": "node test/smoke.ts",
+    "upload-check": "node test/upload-check.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",

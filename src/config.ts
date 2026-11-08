@@ -29,6 +29,7 @@ delete process.env.DISCORD_TOKEN;
 delete process.env.AI_API_KEY;
 
 const secrets = [config.token, config.apiKey];
+export const leaksSecret = (bytes: Buffer) => secrets.some(secret => bytes.includes(secret));
 export const redact = (text: string) => secrets.reduce((out, secret) => out.replaceAll(secret, '[redacted]'), text);
 
 /** Full stack trace including the `cause` chain. */
