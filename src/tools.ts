@@ -18,11 +18,13 @@ export async function channel(id: string) {
 
 export const fetchMessage = async (channelId: string, messageId: string) => (await channel(channelId)).messages.fetch(messageId);
 
+export const where = (m: Message) => m.inGuild() ? `#${m.channel.name} in ${m.guild.name}` : 'DM';
+
 /** One Discord message as an event line. JSON keeps typed text from passing as harness fields. */
 export function describe(m: Message, kind = 'message', toYou?: boolean) {
   return JSON.stringify({
     kind, id: m.id, channelId: m.channelId, toYou,
-    where: m.inGuild() ? `#${m.channel.name} in ${m.guild.name}` : 'DM',
+    where: where(m),
     time: m.createdAt.toISOString(),
     author: { id: m.author.id, name: m.member?.displayName ?? m.author.displayName, authorized: config.authorized.has(m.author.id), bot: m.author.bot || undefined },
     replyTo: m.reference?.messageId,

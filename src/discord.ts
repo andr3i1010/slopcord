@@ -1,9 +1,9 @@
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { Command, container, Listener, Precondition, SapphireClient, Events as SapphireEvents, type ChatInputCommandDeniedPayload, type UserError } from '@sapphire/framework';
-import { Events, GatewayIntentBits, MessageFlags, Partials, type Message, type PartialMessage } from 'discord.js';
+import { Events, GatewayIntentBits, MessageFlags, Partials, type Message, type MessageReaction, type PartialMessage, type PartialMessageReaction, type PartialUser, type User } from 'discord.js';
 import * as brain from './brain.ts';
 import { config } from './config.ts';
-import { describe, fetchImage } from './tools.ts';
+import { describe, fetchImage, where } from './tools.ts';
 
 declare module '@sapphire/framework' {
   interface Preconditions { OwnerOnly: never }
@@ -26,25 +26,36 @@ function queue(m: { id: string; channelId: string }, line: string, opts: { urgen
   else b.timer = setTimeout(flush, Math.min(4000, b.first + 15_000 - Date.now()));
 }
 
-async function onMessage(m: Message) {
+async function onMessage(m: Message, kind = 'message') {
   const me = m.client.user.id;
   if (m.author.id === me) return;
   // Every message reaches the model, which decides whether to answer. Pings only get liveness and priority.
   const ping = !m.author.bot && (!m.inGuild() || m.mentions.users.has(me) || m.mentions.repliedUser?.id === me);
-  if (!ping) return queue(m, describe(m));
+  if (!ping) return queue(m, describe(m, kind));
   brain.addPending(m.channelId, m.id);
   // People don't ack every ping; 👀 only shows up when the answer is slow.
   setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
   const images = await Promise.all(m.attachments.filter(a => !!a.contentType?.startsWith('image/')).map(a => fetchImage(a.url).catch(() => undefined)));
-  queue(m, describe(m, 'message', true), { urgent: true, images: images.filter(i => i !== undefined), pending: true });
+  queue(m, describe(m, kind, true), { urgent: true, images: images.filter(i => i !== undefined), pending: true });
 }
 
 async function onEdit(old: Message | PartialMessage, m: Message | PartialMessage) {
   const full = m.partial ? await m.fetch() : m;
   // Pins, embed unfurls and old uncached messages also fire updates; only fresh text edits matter.
   const fresh = Date.now() - (full.editedTimestamp ?? 0) < 60_000;
-  if (full.author.id === full.client.user.id || !fresh || old.content === full.content) return;
-  queue(full, describe(full, 'edit'));
+  if (!fresh || old.content === full.content) return;
+  await onMessage(full, 'edit');
+}
+
+async function onReaction(reaction: MessageReaction | PartialMessageReaction, reactor: User | PartialUser) {
+  if (reactor.id === reaction.client.user.id) return;
+  const m = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+  const user = reactor.partial ? await reactor.fetch() : reactor;
+  queue(m, JSON.stringify({
+    kind: 'reaction', emoji: reaction.emoji.toString(), messageId: m.id, channelId: m.channelId, where: where(m), time: new Date().toISOString(),
+    by: { id: user.id, name: user.displayName, authorized: config.authorized.has(user.id), bot: user.bot || undefined },
+    on: { author: m.author.id, yours: m.author.id === m.client.user.id || undefined, text: m.content.slice(0, 200) },
+  }));
 }
 
 function onDelete(m: Message | PartialMessage) {
@@ -84,8 +95,11 @@ class OwnerOnly extends Precondition {
 
 export const client = new SapphireClient({
   baseUserDirectory: null,
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
-  partials: [Partials.Channel, Partials.Message],
+  intents: [
+    GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.DirectMessageReactions,
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
   loadMessageCommandListeners: false,
   // Pi swaps in a newer Undici globally; discord.js's bundled one then rejects multipart uploads ("FormData from other sources").
   rest: { makeRequest: fetch as never },
@@ -98,6 +112,7 @@ const pieces = [
   ['listeners', 'messageCreate', listener(Events.MessageCreate, onMessage)],
   ['listeners', 'messageUpdate', listener(Events.MessageUpdate, onEdit)],
   ['listeners', 'messageDelete', listener(Events.MessageDelete, onDelete)],
+  ['listeners', 'reactionAdd', listener(Events.MessageReactionAdd, onReaction)],
   ['listeners', 'commandDenied', listener(SapphireEvents.ChatInputCommandDenied, (error: UserError, { interaction }: ChatInputCommandDeniedPayload) =>
     interaction.reply({ content: error.message, flags: MessageFlags.Ephemeral }))],
   ['commands', 'status', command('status', 'Is the bot alive, and what is it doing?', false, brain.status)],
