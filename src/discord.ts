@@ -9,57 +9,46 @@ declare module '@sapphire/framework' {
   interface Preconditions { OwnerOnly: never }
 }
 
-type Batch = { lines: string[]; images: ImageContent[]; ids: string[]; first: number; timer?: NodeJS.Timeout };
+type Batch = { lines: string[]; images: ImageContent[]; pending: string[]; last: string; first: number; timer?: NodeJS.Timeout };
 const buffers = new Map<string, Batch>();
 
-// Ambient chatter is batched per channel (4s of quiet, 15s at most) so a burst is one model call. Mentions flush at once.
-function queue(channelId: string, line: string, urgent = false, images: ImageContent[] = [], id?: string) {
-  const b = buffers.get(channelId) ?? { lines: [], images: [], ids: [], first: Date.now() };
-  buffers.set(channelId, b);
+// Chatter is batched per channel (4s of quiet, 15s at most) so a burst is one model call. Pings flush at once.
+function queue(m: { id: string; channelId: string }, line: string, opts: { urgent?: boolean; images?: ImageContent[]; pending?: boolean } = {}) {
+  const b = buffers.get(m.channelId) ?? { lines: [], images: [], pending: [], last: m.id, first: Date.now() };
+  buffers.set(m.channelId, b);
   clearTimeout(b.timer);
   b.lines.push(line);
-  b.images.push(...images);
-  if (id) b.ids.push(id);
-  const flush = () => { buffers.delete(channelId); brain.deliver(b.lines.join('\n'), b.images, urgent, b.ids, channelId); };
-  if (urgent) flush();
+  b.images.push(...opts.images ?? []);
+  if (opts.pending) b.pending.push(m.id);
+  b.last = m.id;
+  const flush = () => { buffers.delete(m.channelId); brain.deliver(b.lines.join('\n'), b.images, !!opts.urgent, b.pending, { channelId: m.channelId, messageId: b.last }); };
+  if (opts.urgent) flush();
   else b.timer = setTimeout(flush, Math.min(4000, b.first + 15_000 - Date.now()));
 }
 
-const CONVERSATION_MS = 3 * 60_000;
-const spokeAt = new Map<string, number>();
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** Why a message is probably meant for the bot, if it is: pinged/replied/DM, named, or right after the bot spoke there. */
-function addressed(m: Message) {
-  const me = m.client.user;
-  if (!m.inGuild() || m.mentions.users.has(me.id) || m.mentions.repliedUser?.id === me.id) return 'mention';
-  const names = [me.username, me.globalName, m.guild.members.me?.displayName, 'slopcord'].filter(n => !!n).map(n => escape(n!));
-  if (new RegExp(`(^|[^\\p{L}\\p{N}])(${names.join('|')})($|[^\\p{L}\\p{N}])`, 'iu').test(m.content)) return 'name';
-  if (Date.now() - (spokeAt.get(m.channelId) ?? 0) < CONVERSATION_MS) return 'conversation';
-}
-
 async function onMessage(m: Message) {
-  if (m.author.id === m.client.user.id) { spokeAt.set(m.channelId, Date.now()); return; }
-  const toYou = m.author.bot ? undefined : addressed(m);
-  if (!toYou) return queue(m.channelId, describe(m));
+  const me = m.client.user.id;
+  if (m.author.id === me) return;
+  // Every message reaches the model, which decides whether to answer. Pings only get liveness and priority.
+  const ping = !m.author.bot && (!m.inGuild() || m.mentions.users.has(me) || m.mentions.repliedUser?.id === me);
+  if (!ping) return queue(m, describe(m));
   brain.addPending(m.channelId, m.id);
-  // People don't ack every ping; 👀 only shows up when an actual ping is answered slowly.
-  if (toYou === 'mention') setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
+  // People don't ack every ping; 👀 only shows up when the answer is slow.
+  setTimeout(() => { if (brain.isPending(m.id)) m.react('👀').catch(() => {}); }, 5000);
   const images = await Promise.all(m.attachments.filter(a => !!a.contentType?.startsWith('image/')).map(a => fetchImage(a.url).catch(() => undefined)));
-  // Follow-ups in a conversation are batched like chatter, so someone typing three lines gets one answer.
-  queue(m.channelId, describe(m, 'message', toYou), toYou !== 'conversation', images.filter(i => i !== undefined), m.id);
+  queue(m, describe(m, 'message', true), { urgent: true, images: images.filter(i => i !== undefined), pending: true });
 }
 
 async function onEdit(old: Message | PartialMessage, m: Message | PartialMessage) {
   const full = m.partial ? await m.fetch() : m;
   // Embed unfurls also fire updates; only real text edits matter.
   if (full.author.id === full.client.user.id || old.content === full.content) return;
-  queue(full.channelId, describe(full, 'edit'));
+  queue(full, describe(full, 'edit'));
 }
 
 function onDelete(m: Message | PartialMessage) {
   if (m.author?.id === m.client.user.id) return;
-  queue(m.channelId, JSON.stringify({ kind: 'delete', id: m.id, channelId: m.channelId, author: m.author?.id }));
+  queue(m, JSON.stringify({ kind: 'delete', id: m.id, channelId: m.channelId, author: m.author?.id }));
 }
 
 function listener(event: string, run: (...args: any[]) => unknown) {

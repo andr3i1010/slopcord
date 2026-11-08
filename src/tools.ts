@@ -19,7 +19,7 @@ export async function channel(id: string) {
 export const fetchMessage = async (channelId: string, messageId: string) => (await channel(channelId)).messages.fetch(messageId);
 
 /** One Discord message as an event line. JSON keeps typed text from passing as harness fields. */
-export function describe(m: Message, kind = 'message', toYou?: string) {
+export function describe(m: Message, kind = 'message', toYou?: boolean) {
   return JSON.stringify({
     kind, id: m.id, channelId: m.channelId, toYou,
     where: m.inGuild() ? `#${m.channel.name} in ${m.guild.name}` : 'DM',

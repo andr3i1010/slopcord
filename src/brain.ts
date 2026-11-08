@@ -30,7 +30,7 @@ let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {};
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
 let failure: Error | undefined;
-let sentTo = new Set<string>();
+let sentTo = new Set<string>(), lastTarget: Pending | undefined;
 const recentDms = new Map<string, number>();
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
@@ -57,7 +57,7 @@ function addWake(ms: number, why: string) {
  * (`steer` lands after the current tool call, `followUp` after the run). The gate keeps two deliveries
  * from racing into two runs.
  */
-export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], channelId?: string) {
+export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
   gate = gate.then(async () => {
     await compacting;
     const index = memoryIndex();
@@ -70,7 +70,8 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
-          if (ids.length && channelId) typing(channelId);
+          if (target) lastTarget = target;
+          if (ids.length && target) typing(target.channelId);
           accepted();
         },
       }).catch(err => { void report(err, take(ids)); accepted(); });
@@ -86,13 +87,15 @@ function settle(aborted: boolean) {
   const done = take([...pending.values()].filter(p => p.delivered).map(p => p.messageId));
   if (err) void report(err, done, errored ? last : undefined);
   else for (const p of done) void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
-  // Final text answers a waiting mention or DM. In plain chatter it's private: models think out loud there.
+  // Final text is the answer: to a waiting ping, else in the channel of the latest messages. `-` means staying quiet.
   const said = !err && last && last.timestamp >= runStarted && last.stopReason === 'stop'
     ? last.content.flatMap(c => c.type === 'text' ? [c.text] : []).join('').trim() : '';
-  const target = done.findLast(p => !sentTo.has(p.channelId));
+  const pinged = done.findLast(p => !sentTo.has(p.channelId));
+  const target = pinged ?? (lastTarget && !sentTo.has(lastTarget.channelId) ? lastTarget : undefined);
   // Models narrate silence ("(stays quiet)", "*says nothing*") instead of returning nothing; a stage-direction line is never chat.
-  const silent = said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
-  if (said && !silent && target) void speak(said, target);
+  const silent = /^[`'"]?-[`'"]?$/.test(said) || said.split('\n').some(line => /^[(*_[]+[^()*_[\]]{0,80}[)*_\]]+$/.test(line.trim()));
+  if (said && !silent && target) void speak(said, target, !!pinged);
+  lastTarget = undefined;
   sentTo = new Set();
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
   const usage = session.getContextUsage();
@@ -122,7 +125,7 @@ const typing = (channelId: string) => void channel(channelId).then(c => c.sendTy
 export const isPending = (messageId: string) => pending.has(messageId);
 
 /** Post the way a person would: separate thoughts as separate short messages, quoting only when the chat moved on. */
-async function speak(said: string, target: Pending) {
+async function speak(said: string, target: Pending, pinged: boolean) {
   try {
     const c = await channel(target.channelId);
     const thoughts = said.split(/\n\s*\n/);
@@ -132,7 +135,7 @@ async function speak(said: string, target: Pending) {
       const quote = i === 0 && c.lastMessageId !== target.messageId;
       await c.send({ content: redact(part), reply: quote ? { messageReference: target.messageId, failIfNotExists: false } : undefined });
     }
-  } catch (error) { await report(error, [target]); }
+  } catch (error) { await report(error, pinged ? [target] : []); }
 }
 
 /** ⚠️ plus the full trace on the messages that were waiting; anything else goes to the owner's DMs. */
@@ -204,7 +207,7 @@ export async function start() {
   setInterval(tick, 8000);
   for (const p of [...pending.values()]) {
     const m = await fetchMessage(p.channelId, p.messageId).catch(() => undefined);
-    if (m) deliver(describe(m), [], true, [m.id], m.channelId);
+    if (m) deliver(describe(m, 'message', true), [], true, [m.id], p);
     else take([p.messageId]);
   }
 }
