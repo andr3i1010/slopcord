@@ -107,7 +107,7 @@ const write: ToolDefinition[] = [
     name: 'send', label: 'Send', description: 'Post a message in a channel or DM. This is the only way to talk; not calling it means staying silent. Long text is split automatically.',
     parameters: Type.Object({
       channelId: Type.String(), text: Type.String(),
-      replyTo: Type.Optional(Type.String({ description: 'message ID to reply to' })),
+      replyTo: Type.Optional(Type.String({ description: 'ID of the message you are answering; the reply quotes it' })),
       files: Type.Optional(Type.Array(Type.Object({
         name: Type.String(),
         path: Type.Optional(Type.String({ description: 'file on the server, relative to your workspace' })),
