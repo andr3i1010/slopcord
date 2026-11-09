@@ -1,6 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
@@ -69,27 +68,20 @@ export function outgoing(t: string): { content: string; files?: { attachment: Bu
 
 const ids = { channelId: Type.String(), messageId: Type.String() };
 
+/** One picture from the AI proxy's image model. */
+export async function generateImage(prompt: string) {
+  const res = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: 'POST', signal: AbortSignal.timeout(120_000),
+    headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: config.imageModel, modalities: ['image', 'text'], messages: [{ role: 'user', content: prompt }] }),
+  });
+  const body = await res.json().catch(() => ({})) as any;
+  const [, mime, data] = String(body.choices?.[0]?.message?.images?.[0]?.image_url?.url).match(/^data:image\/(\w+);base64,(.+)$/) ?? [];
+  if (!data) throw new Error(`no image (HTTP ${res.status}): ${JSON.stringify(body.error ?? body.choices?.[0]?.message?.content ?? body).slice(0, 300)}`);
+  return { attachment: Buffer.from(data, 'base64'), name: `image.${mime}` };
+}
+
 const read: ToolDefinition[] = [
-  defineTool({
-    name: 'make_image', label: 'Make image',
-    description: 'Generate an image from a text prompt with an AI image model. Costs credits on every call: last resort, only when SVG or Python drawing can\'t do it. Returns a file path; post it with `send` and `files: [{ name, path }]`.',
-    parameters: Type.Object({ prompt: Type.String({ description: 'what to draw: subject, style, composition, any text it should contain' }) }),
-    async execute(_id, p, signal) {
-      const res = await fetch(`${config.baseUrl}/chat/completions`, {
-        method: 'POST', signal: AbortSignal.any([AbortSignal.timeout(120_000), ...signal ? [signal] : []]),
-        headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: config.imageModel, modalities: ['image', 'text'], messages: [{ role: 'user', content: p.prompt }] }),
-      });
-      const body = await res.json().catch(() => ({})) as any;
-      const [, mime, data] = String(body.choices?.[0]?.message?.images?.[0]?.image_url?.url).match(/^data:image\/(\w+);base64,(.+)$/) ?? [];
-      if (!data) throw new Error(`no image (HTTP ${res.status}): ${JSON.stringify(body.error ?? body.choices?.[0]?.message?.content ?? body).slice(0, 300)}`);
-      // /tmp, not the data volume: images are ~1 MB each and only needed until they're posted.
-      const path = resolve(tmpdir(), 'slopcord-images', `${Date.now()}.${mime}`);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, Buffer.from(data, 'base64'));
-      return text(`saved ${path}`);
-    },
-  }),
   defineTool({
     name: 'history', label: 'History', description: 'Read recent messages in a channel or DM, newest last. Page back with `before`.',
     parameters: Type.Object({ channelId: Type.String(), before: Type.Optional(Type.String({ description: 'message ID' })), limit: Type.Optional(Type.Number({ description: '1-100, default 30' })) }),
@@ -127,6 +119,30 @@ const read: ToolDefinition[] = [
 ];
 
 const write: ToolDefinition[] = [
+  defineTool({
+    name: 'make_image', label: 'Make image',
+    description: 'Generate a picture with an AI image model and post it. Costs credits on every call: last resort, only when SVG or Python drawing can\'t do it. Returns at once and posts the picture by itself when it\'s ready (10-20 s), so carry on meanwhile.',
+    parameters: Type.Object({
+      prompt: Type.String({ description: 'what to draw: subject, style, composition, any text it should contain' }),
+      channelId: Type.String(),
+      replyTo: Type.Optional(Type.String({ description: 'ID of the message you are answering' })),
+      text: Type.Optional(Type.String({ description: 'caption posted with the picture' })),
+    }),
+    async execute(_id, p) {
+      const c = await channel(p.channelId);
+      // In the background: waiting 10-20 s here would hold up every other answer.
+      void (async () => {
+        try {
+          const file = await generateImage(p.prompt);
+          await c.send({ content: p.text ? redact(p.text) : undefined, files: [file], reply: p.replyTo ? { messageReference: p.replyTo, failIfNotExists: false } : undefined });
+        } catch (error) {
+          console.error(error);
+          await c.send(`couldn't make that picture: ${redact(error instanceof Error ? error.message : String(error)).slice(0, 300)}`).catch(() => {});
+        }
+      })();
+      return text('generating; it gets posted by itself when ready. Carry on.');
+    },
+  }),
   defineTool({
     name: 'send', label: 'Send', description: 'Post a message in a channel or DM. This is the only way to talk; not calling it means staying silent. Long text is split automatically.',
     parameters: Type.Object({
