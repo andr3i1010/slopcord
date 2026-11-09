@@ -71,7 +71,9 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
     indexShown = index;
-    lastBatch = `[events · ${localTime()}]\n${lines}${memo}`;
+    // The rule the model slips on most, as the last thing it reads before acting.
+    const remind = /"kind":"(message|edit)"/.test(lines) ? '\n[reminder] Answering someone? `send` with `replyTo` = the `id` of their message above, in its channel. Then `-`.' : '';
+    lastBatch = `[events · ${localTime()}]\n${lines}${memo}${remind}`;
     lastActivity = Date.now();
     await new Promise<void>(accepted => {
       const fail = (err: unknown) => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); };
