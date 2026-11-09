@@ -4,6 +4,12 @@
       "url": "https://mcp.exa.ai/mcp",
       "exposure": "direct",
       "description": "Search the web and fetch clean page contents with Exa."
+    },
+    "browser": {
+      "command": "playwright-mcp",
+      "args": ["--cdp-endpoint", "ws://chromium:3000"],
+      "exposure": "deferred",
+      "description": "A real Chromium browser: open pages, click, type, read and screenshot them. Use it when Exa's search and fetch can't get what you need, such as JavaScript-heavy or interactive sites."
     }
   }
 }
