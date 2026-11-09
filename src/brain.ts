@@ -60,13 +60,13 @@ function addWake(ms: number, why: string) {
 
 /**
  * Hand events to the one brain. Idle starts a run; the same channel joins the running one through Pi's queue
- * (`steer` lands after the current tool call, `followUp` after the turn); other channels wait for the run to end.
- * The gate keeps two deliveries from racing into two runs.
+ * (`steer` lands after the current tool call, `followUp` after the turn). Messages to you from other channels steer
+ * in too; other channels' chatter waits for the run to end. The gate keeps two deliveries from racing into two runs.
  */
 export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
   gate = gate.then(async () => {
     const key = target?.channelId ?? '';
-    if (running !== undefined && running !== key) return void waiting.push({ lines, images, urgent, ids, target });
+    if (running !== undefined && running !== key && !urgent) return void waiting.push({ lines, images, urgent, ids, target });
     await compacting;
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
@@ -80,11 +80,15 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
       session.prompt(lastBatch, {
         images, expandPromptTemplates: false, streamingBehavior: urgent ? 'steer' : 'followUp',
         preflightResult: () => {
-          running = key;
           for (const id of ids) { const p = pending.get(id); if (p) p.delivered = true; }
-          // Answer the ping if there is one; a later chatter batch doesn't steal its reply.
-          if (ids.length) { speakTo = { channelId: key, messageId: ids.at(-1)! }; pingedTo = true; typing(key); }
-          else if (!pingedTo) speakTo = target;
+          // Joined a run in another channel: that run keeps its channel and final text; this gets answered with send.
+          if (running !== undefined && running !== key) typing(key);
+          else {
+            running = key;
+            // Answer the ping if there is one; a later chatter batch doesn't steal its reply.
+            if (ids.length) { speakTo = { channelId: key, messageId: ids.at(-1)! }; pingedTo = true; typing(key); }
+            else if (!pingedTo) speakTo = target;
+          }
           accepted();
         },
       }).catch(fail);
