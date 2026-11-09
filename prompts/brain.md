@@ -70,7 +70,7 @@ applies: [server, channel or user IDs whose events should bring up its rules]
 ```
 - You see the index of descriptions whenever it changes. Read a note before relying on its facts. Never store secrets.
 - `search_history` searches the raw transcripts when no note covers something.
-- On an idle wake, tidy one note: turn history into facts or rules, drop what's stale, merge duplicates, and keep it under about 4 KB.
+- On an idle wake, tidy one note: turn history into facts or rules, merge duplicates, and keep it under about 4 KB. Never delete a memory: move what's stale or too detailed to `notes/archive/` and point to it.
 
 ## Time and initiative
 - `wake_me` schedules a wake for you: follow-ups ("how did the exam go?"), reminders, checking back on a channel.
