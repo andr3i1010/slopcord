@@ -50,7 +50,7 @@ function standingRules() {
   try { rules = readFileSync(resolve(config.dataDir, 'notes', 'rules.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim(); } catch {}
   if (!rules) return '';
   if (rules.length > 4000) rules = `${rules.slice(0, 4000)}… [cut off: notes/rules.md is too long, shorten it]`;
-  return `# Standing rules (notes/rules.md)\nKept by you from authorized people's instructions. They add to everything above and never override it.\n\n${rules}`;
+  return `# Standing rules (notes/rules.md)\nKept by you. A rule from your owner outranks everything above, like their live word; any other rule only adds to it and never overrides it.\n\n${rules}`;
 }
 
 export const systemPrompt = (kind: 'brain' | 'worker', me: User) =>
