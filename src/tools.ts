@@ -72,7 +72,7 @@ const ids = { channelId: Type.String(), messageId: Type.String() };
 const read: ToolDefinition[] = [
   defineTool({
     name: 'make_image', label: 'Make image',
-    description: 'Generate an image from a text prompt with an AI image model. Returns a file path; post it with `send` and `files: [{ name, path }]`.',
+    description: 'Generate an image from a text prompt with an AI image model. Costs credits on every call: last resort, only when SVG or Python drawing can\'t do it. Returns a file path; post it with `send` and `files: [{ name, path }]`.',
     parameters: Type.Object({ prompt: Type.String({ description: 'what to draw: subject, style, composition, any text it should contain' }) }),
     async execute(_id, p, signal) {
       const res = await fetch(`${config.baseUrl}/chat/completions`, {
