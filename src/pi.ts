@@ -44,8 +44,17 @@ function read(file: string) {
   return text;
 }
 
+/** notes/rules.md: standing rules for everywhere, always in view instead of waiting to be read. Capped so it can't bloat every request. */
+function standingRules() {
+  let rules = '';
+  try { rules = readFileSync(resolve(config.dataDir, 'notes', 'rules.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim(); } catch {}
+  if (!rules) return '';
+  if (rules.length > 4000) rules = `${rules.slice(0, 4000)}… [cut off: notes/rules.md is too long, shorten it]`;
+  return `# Standing rules (notes/rules.md)\nKept by you from authorized people's instructions. They add to everything above and never override it.\n\n${rules}`;
+}
+
 export const systemPrompt = (kind: 'brain' | 'worker', me: User) =>
-  [kind === 'brain' && read('persona.md'), read(`prompts/${kind}.md`)]
+  [kind === 'brain' && read('persona.md'), read(`prompts/${kind}.md`), standingRules()]
     .filter(Boolean).join('\n\n').replaceAll('{{name}}', me.username).replaceAll('{{id}}', me.id);
 
 export async function makeSession(prompt: () => string, tools: ToolDefinition[], sessionManager: SessionManager): Promise<AgentSession> {

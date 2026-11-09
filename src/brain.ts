@@ -5,7 +5,7 @@ import { defineTool, SessionManager, type AgentSession, type AgentSessionEvent }
 import { container } from '@sapphire/framework';
 import { Type } from 'typebox';
 import { chain, config, localTime, redact } from './config.ts';
-import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
+import { memoryIndex, rulesFor, searchHistory, sessionsDir } from './memory.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
 import { channel, describe, discordTools, fetchMessage, outgoing, text } from './tools.ts';
 import { workerList, workerTools } from './workers.ts';
@@ -72,9 +72,10 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
     indexShown = index;
+    const rules = rulesFor(lines);
     // The rule the model slips on most, as the last thing it reads before acting.
     const remind = /"kind":"(message|edit)"/.test(lines) ? '\n[reminder] Answering someone? `send` with `replyTo` = the `id` of their message above, in its channel. Then `-`.' : '';
-    lastBatch = `[events · ${localTime()}]\n${lines}${memo}${remind}`;
+    lastBatch = `[events · ${localTime()}]\n${lines}${memo}${rules ? `\n[rules from your notes that apply here]\n${rules}` : ''}${remind}`;
     lastActivity = Date.now();
     await new Promise<void>(accepted => {
       const fail = (err: unknown) => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); };
