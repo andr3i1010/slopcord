@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
@@ -69,6 +70,26 @@ export function outgoing(t: string): { content: string; files?: { attachment: Bu
 const ids = { channelId: Type.String(), messageId: Type.String() };
 
 const read: ToolDefinition[] = [
+  defineTool({
+    name: 'make_image', label: 'Make image',
+    description: 'Generate an image from a text prompt with an AI image model. Returns a file path; post it with `send` and `files: [{ name, path }]`.',
+    parameters: Type.Object({ prompt: Type.String({ description: 'what to draw: subject, style, composition, any text it should contain' }) }),
+    async execute(_id, p, signal) {
+      const res = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: 'POST', signal: AbortSignal.any([AbortSignal.timeout(120_000), ...signal ? [signal] : []]),
+        headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: config.imageModel, modalities: ['image', 'text'], messages: [{ role: 'user', content: p.prompt }] }),
+      });
+      const body = await res.json().catch(() => ({})) as any;
+      const [, mime, data] = String(body.choices?.[0]?.message?.images?.[0]?.image_url?.url).match(/^data:image\/(\w+);base64,(.+)$/) ?? [];
+      if (!data) throw new Error(`no image (HTTP ${res.status}): ${JSON.stringify(body.error ?? body.choices?.[0]?.message?.content ?? body).slice(0, 300)}`);
+      // /tmp, not the data volume: images are ~1 MB each and only needed until they're posted.
+      const path = resolve(tmpdir(), 'slopcord-images', `${Date.now()}.${mime}`);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, Buffer.from(data, 'base64'));
+      return text(`saved ${path}`);
+    },
+  }),
   defineTool({
     name: 'history', label: 'History', description: 'Read recent messages in a channel or DM, newest last. Page back with `before`.',
     parameters: Type.Object({ channelId: Type.String(), before: Type.Optional(Type.String({ description: 'message ID' })), limit: Type.Optional(Type.Number({ description: '1-100, default 30' })) }),

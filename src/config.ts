@@ -19,6 +19,8 @@ export const config = {
   baseUrl: env('AI_BASE_URL').replace(/\/+$/, ''),
   model: env('AI_MODEL'),
   apiKey: env('AI_API_KEY'),
+  // Half the price of gemini-3.1-flash-image and faster; that one is better at text inside images.
+  imageModel: env('AI_IMAGE_MODEL', 'google/gemini-3.1-flash-lite-image'),
   contextWindow: Number(env('AI_CONTEXT_WINDOW', '131072')),
   dataDir: resolve(root, env('DATA_DIR', 'data')),
   timeZone: env('TZ', 'Europe/Amsterdam'),
