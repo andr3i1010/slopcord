@@ -16,7 +16,8 @@
     "media-check": "node test/media-check.ts",
     "routing-check": "DATA_DIR=$(mktemp -d) node test/routing-check.ts",
     "gif-check": "node test/gif-check.ts",
-    "rules-check": "DATA_DIR=$(mktemp -d) node test/rules-check.ts"
+    "rules-check": "DATA_DIR=$(mktemp -d) node test/rules-check.ts",
+    "permissions-check": "node test/permissions-check.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",

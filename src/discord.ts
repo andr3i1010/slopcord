@@ -1,9 +1,10 @@
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { Command, container, Listener, Precondition, SapphireClient, Events as SapphireEvents, type ChatInputCommandDeniedPayload, type UserError } from '@sapphire/framework';
-import { Events, GatewayIntentBits, MessageFlags, Partials, type Message, type MessageReaction, type PartialMessage, type PartialMessageReaction, type PartialUser, type User } from 'discord.js';
+import { Events, GatewayIntentBits, MessageFlags, Partials, type Channel, type Guild, type GuildMember, type Message, type MessageReaction, type PartialMessage, type PartialMessageReaction, type PartialUser, type Role, type User } from 'discord.js';
 import * as brain from './brain.ts';
 import { config } from './config.ts';
 import { loadMedia, media } from './media.ts';
+import { changes, snapshot, type Snapshot } from './permissions.ts';
 import { describe, where } from './tools.ts';
 
 declare module '@sapphire/framework' {
@@ -67,6 +68,16 @@ function onDelete(m: Message | PartialMessage) {
   queue(m, JSON.stringify({ kind: 'delete', id: m.id, channelId: m.channelId, author: m.author?.id }));
 }
 
+const snapshots = new Map<string, Snapshot>();
+
+/** Tell the brain what it gained or lost in this server since the last look; the first look only records. */
+function permissionChanges(guild: Guild) {
+  const before = snapshots.get(guild.id), after = snapshot(guild);
+  if (!after) return;
+  snapshots.set(guild.id, after);
+  if (before) for (const event of changes(guild, before, after)) brain.deliver(JSON.stringify({ ...event, time: new Date().toISOString() }));
+}
+
 function listener(event: string, run: (...args: any[]) => unknown) {
   return class extends Listener {
     constructor(context: Listener.LoaderContext, options: Listener.Options) { super(context, { ...options, event }); }
@@ -112,7 +123,19 @@ export const client = new SapphireClient({
 // Node runs our .ts files natively, which Sapphire's directory scan doesn't detect, so pieces are registered by hand.
 const pieces = [
   ['preconditions', 'OwnerOnly', OwnerOnly],
-  ['listeners', 'ready', listener(Events.ClientReady, async () => { await brain.start(); console.info(`Online as ${client.user!.tag}`); })],
+  ['listeners', 'ready', listener(Events.ClientReady, async () => {
+    for (const guild of client.guilds.cache.values()) permissionChanges(guild);
+    await brain.start();
+    console.info(`Online as ${client.user!.tag}`);
+  })],
+  // Role edits and channel overwrites arrive with the Guilds intent.
+  // shortcut: a role *assigned* to the bot is a member update, which Discord may only send with the privileged GuildMembers
+  // intent; then that change is noticed at the next role or channel event. Poll guild.members.fetchMe() if that bites.
+  ['listeners', 'roleUpdate', listener(Events.GuildRoleUpdate, (_old: Role, role: Role) => permissionChanges(role.guild))],
+  ['listeners', 'roleDelete', listener(Events.GuildRoleDelete, (role: Role) => permissionChanges(role.guild))],
+  ['listeners', 'channelUpdate', listener(Events.ChannelUpdate, (_old: unknown, c: Channel) => { if (!c.isDMBased()) permissionChanges(c.guild); })],
+  ['listeners', 'memberUpdate', listener(Events.GuildMemberUpdate, (_old: unknown, m: GuildMember) => { if (m.id === m.client.user.id) permissionChanges(m.guild); })],
+  ['listeners', 'guildCreate', listener(Events.GuildCreate, permissionChanges)],
   ['listeners', 'messageCreate', listener(Events.MessageCreate, onMessage)],
   ['listeners', 'messageUpdate', listener(Events.MessageUpdate, onEdit)],
   ['listeners', 'messageDelete', listener(Events.MessageDelete, onDelete)],
