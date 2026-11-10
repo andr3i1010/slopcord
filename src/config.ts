@@ -24,6 +24,8 @@ export const config = {
   contextWindow: Number(env('AI_CONTEXT_WINDOW', '131072')),
   dataDir: resolve(root, env('DATA_DIR', 'data')),
   timeZone: env('TZ', 'Europe/Amsterdam'),
+  // The dashboard has no login of its own (Orchard's protection is in front), so only the container opens it up.
+  dashboardHost: env('DASHBOARD_HOST', '127.0.0.1'),
 };
 // Child processes (the model's shell) inherit process.env; keep the secrets out of it.
 delete process.env.DISCORD_TOKEN;

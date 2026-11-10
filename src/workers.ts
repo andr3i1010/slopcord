@@ -2,6 +2,7 @@ import type { ImageContent } from '@earendil-works/pi-ai';
 import { defineTool, SessionManager, type AgentSession } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
 import { Type } from 'typebox';
+import { bus } from './bus.ts';
 import { chain, config, redact } from './config.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
 import { discordTools, text } from './tools.ts';
@@ -12,14 +13,23 @@ type Deliver = (lines: string, images?: ImageContent[], urgent?: boolean) => voi
 const workers = new Map<string, Worker>();
 let seq = 0;
 
-export const workerList = () =>
-  [...workers].map(([id, w]) => `${id} (${Math.round((Date.now() - w.started) / 1000)}s): ${w.task.slice(0, 80)}`);
+export const workerInfo = () => [...workers].map(([id, w]) => ({ id, task: w.task, started: w.started }));
 
 function get(id: string) {
   const w = workers.get(id);
   if (!w) throw new Error(`No running worker ${id}.`);
   return w;
 }
+
+/** Answer a worker's open question, or steer it with new instructions. */
+export async function messageWorker(id: string, text: string) {
+  const w = get(id);
+  if (w.answer) w.answer(text);
+  else if (w.session) await w.session.steer(text);
+  else throw new Error(`Worker ${id} is still starting.`);
+}
+
+export const stopWorker = async (id: string) => { await get(id).session?.abort(); };
 
 /** Tools for the brain; each worker gets its own ask_brain/tell_brain bound to its id. */
 export function workerTools(deliver: Deliver) {
@@ -60,6 +70,7 @@ export function workerTools(deliver: Deliver) {
           try {
             const prompt = systemPrompt('worker', container.client.user!);
             w.session = await makeSession(() => prompt, [...discordTools(true), ...workerSide(id)], SessionManager.inMemory(config.dataDir));
+            bus.emit('session', id, w.session);
             await w.session.prompt(p.task, { expandPromptTemplates: false });
             const last = lastReply(w.session);
             if (last?.stopReason === 'error' || last?.stopReason === 'aborted') throw new Error(last.errorMessage ?? last.stopReason);
@@ -68,6 +79,7 @@ export function workerTools(deliver: Deliver) {
             tell({ kind: 'worker_failed', worker: id, error: redact(chain(e)) });
           } finally {
             workers.delete(id);
+            bus.emit('session-end', id);
             w.session?.dispose();
           }
         })();
@@ -77,18 +89,12 @@ export function workerTools(deliver: Deliver) {
     defineTool({
       name: 'message_worker', label: 'Message worker', description: "Answer a worker's question, or steer a running worker with new instructions.",
       parameters: Type.Object({ worker: Type.String(), text: Type.String() }),
-      async execute(_id, p) {
-        const w = get(p.worker);
-        if (w.answer) w.answer(p.text);
-        else if (w.session) await w.session.steer(p.text);
-        else throw new Error(`Worker ${p.worker} is still starting.`);
-        return text('delivered');
-      },
+      async execute(_id, p) { await messageWorker(p.worker, p.text); return text('delivered'); },
     }),
     defineTool({
       name: 'stop_worker', label: 'Stop worker', description: 'Abort a running worker.',
       parameters: Type.Object({ worker: Type.String() }),
-      async execute(_id, p) { await get(p.worker).session?.abort(); return text('stopping'); },
+      async execute(_id, p) { await stopWorker(p.worker); return text('stopping'); },
     }),
   ];
 }

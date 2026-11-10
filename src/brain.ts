@@ -4,12 +4,13 @@ import type { AssistantMessage, ImageContent } from '@earendil-works/pi-ai';
 import { defineTool, SessionManager, type AgentSession, type AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import { container } from '@sapphire/framework';
 import { Type } from 'typebox';
+import { bus, type Reported } from './bus.ts';
 import { chain, config, localTime, redact } from './config.ts';
 import { memoryGate } from './jev.ts';
 import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
 import { channel, describe, discordTools, fetchMessage, outgoing, text } from './tools.ts';
-import { workerList, workerTools } from './workers.ts';
+import { workerInfo, workerTools } from './workers.ts';
 
 const STALL_MS = 3 * 60_000;
 const IDLE_WAKE_MS = 4 * 3600_000;
@@ -41,6 +42,8 @@ let waiting: Batch[] = [];
 let running: string | undefined; // channel of the current run; '' for channel-less events (wakes, workers)
 let speakTo: Pending | undefined, pingedTo = false, sentTo = new Set<string>();
 const recentDms = new Map<string, number>();
+/** The last 50 errors report() handled, for the dashboard. */
+export const errors: Reported[] = [];
 
 const savePending = () => save('pending.json', [...pending.values()].map(({ channelId, messageId }) => ({ channelId, messageId })));
 
@@ -108,7 +111,7 @@ function settle(aborted: boolean) {
   failure = undefined;
   const done = take([...pending.values()].filter(p => p.delivered).map(p => p.messageId));
   if (err) void report(err, done, errored ? last : undefined);
-  else for (const p of done) void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
+  else done.forEach(unwatch);
   running = speakTo = undefined;
   pingedTo = false;
   sentTo = new Set();
@@ -177,6 +180,7 @@ function onEvent(e: AgentSessionEvent) {
 const recallGate = memoryGate(() => lastEvents);
 
 const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
+const unwatch = (p: Pending) => void fetchMessage(p.channelId, p.messageId).then(m => m.reactions.resolve('👀')?.users.remove()).catch(() => {});
 export const isPending = (messageId: string) => pending.has(messageId);
 
 /** A plain remark to the channel; separate thoughts go out as separate short messages. */
@@ -205,6 +209,9 @@ export async function report(err: unknown, targets: Pending[] = [], reply?: Assi
     `last tool call: ${lastTool || 'none'}`,
     `last events delivered:\n${lastBatch || 'none'}`,
   ].filter(Boolean).join('\n\n'));
+  const record = { time: Date.now(), message: redact(e.message), trace };
+  if (errors.push(record) > 50) errors.shift();
+  bus.emit('reported', record);
   const message = { content: `⚠️ couldn't finish this: ${redact(e.message).slice(0, 300)}`, files: [{ attachment: Buffer.from(trace), name: 'error.txt' }] };
   try {
     if (!targets.length) {
@@ -262,6 +269,7 @@ export async function start() {
     [recallGate.extension],
   );
   session.subscribe(onEvent);
+  bus.emit('session', 'brain', session);
   ticker = setInterval(tick, 8000);
   for (const p of [...pending.values()]) {
     const m = await fetchMessage(p.channelId, p.messageId).catch(() => undefined);
@@ -270,19 +278,57 @@ export async function start() {
   }
 }
 
+/** What /status and the dashboard show. Times are epoch ms, so the dashboard can tick durations itself. */
+export function state() {
+  const usage = session?.getContextUsage();
+  const where = (channelId: string) => {
+    const c = container.client.channels.cache?.get(channelId);
+    return !c ? channelId : c.isDMBased() ? 'DM' : `#${c.name}`;
+  };
+  return {
+    startedAt: Math.round(performance.timeOrigin),
+    ready: !!session, down,
+    // running is '' for channel-less runs (wakes, workers, the dashboard).
+    working: session?.isStreaming ? { since: runStarted, where: running ? where(running) : undefined } : undefined,
+    lastTool,
+    queued: session?.pendingMessageCount ?? 0,
+    pending: [...pending.values()].map(({ channelId, messageId, delivered }) => ({ where: where(channelId), messageId, delivered: !!delivered })),
+    workers: workerInfo(),
+    context: usage && { percent: usage.percent, window: usage.contextWindow },
+    wakes,
+    lastError,
+  };
+}
+
 export function status() {
   if (!session) return 'starting up';
-  const usage = session.getContextUsage();
+  const s = state(), age = (ms: number) => Math.round((Date.now() - ms) / 1000);
   return [
     `alive, up ${Math.round(process.uptime() / 60)} min`,
-    session.isStreaming ? `working for ${Math.round((Date.now() - runStarted) / 1000)}s, last tool: ${lastTool.slice(0, 200) || 'none'}` : 'idle',
-    `queued: ${session.pendingMessageCount} · unanswered mentions: ${pending.size}`,
-    `workers: ${workerList().join('; ') || 'none'}`,
-    `context: ${usage?.percent?.toFixed(0) ?? '?'}% of ${usage?.contextWindow ?? '?'} tokens`,
-    `next wake: ${wakes.length ? localTime(Math.min(...wakes.map(w => w.at))) : 'none'}`,
-    `last error: ${lastError || 'none'}`,
+    s.working ? `working for ${age(s.working.since)}s, last tool: ${s.lastTool.slice(0, 200) || 'none'}` : 'idle',
+    `queued: ${s.queued} · unanswered mentions: ${s.pending.length}`,
+    `workers: ${s.workers.map(w => `${w.id} (${age(w.started)}s): ${w.task.slice(0, 80)}`).join('; ') || 'none'}`,
+    `context: ${s.context?.percent?.toFixed(0) ?? '?'}% of ${s.context?.window ?? '?'} tokens`,
+    `next wake: ${s.wakes.length ? localTime(Math.min(...s.wakes.map(w => w.at))) : 'none'}`,
+    `last error: ${s.lastError || 'none'}`,
   ].join('\n');
 }
+
+/** The owner typing in the dashboard. Joins the current run without moving or muting it; idle, it starts a channel-less run. */
+export function interject(text: string) {
+  if (down) throw new Error(`offline after ${MAX_FAILURES} failed runs; restart first`);
+  if (!session) throw new Error('still starting up');
+  const author = { id: config.ownerId, name: 'owner', authorized: true };
+  deliver(JSON.stringify({ kind: 'dashboard', time: new Date().toISOString(), author, text }), [], true, [], running ? speakTo : undefined);
+}
+
+export function deleteWake(at: number) {
+  wakes = wakes.filter(w => w.at !== at);
+  save('wakes.json', wakes);
+}
+
+/** Forget a ping that will never be answered. */
+export const dropPending = (messageId: string) => take([messageId]).forEach(unwatch);
 
 export async function abort() {
   if (!session.isStreaming) return 'nothing is running';
