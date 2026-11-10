@@ -9,7 +9,8 @@ const json = (v: unknown) => JSON.stringify(v, null, 2);
 export function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return content === undefined ? '' : json(content);
-  return content.map((c: any) => c.type === 'text' ? c.text : c.type === 'image' ? c.data : c.type === 'thinking' ? '' : json(c)).filter(Boolean).join('\n');
+  // Tool calls are listed separately by describe(); thinking stays out of the console.
+  return content.map((c: any) => c.type === 'text' ? c.text : c.type === 'image' ? c.data : c.type === 'thinking' || c.type === 'toolCall' ? '' : json(c)).filter(Boolean).join('\n');
 }
 
 /** One console line for a session entry: a short label and the full text (CSS cuts it to one line until expanded). */
