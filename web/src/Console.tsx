@@ -1,10 +1,10 @@
 import { Box, Button, TextField, Typography } from '@mui/material';
 import { memo, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
-import { clock, describe, describeLive, type Line } from './format.ts';
+import { clock, describe, describeLive, thinkingOf, type Line } from './format.ts';
 import { act, api, loadOlder, useStore, type Row } from './store.ts';
 
-const tones: Record<NonNullable<Line['tone']>, string> = { error: 'error.main', dim: 'text.disabled', tool: 'info.main', say: 'success.main' };
+const tones: Record<NonNullable<Line['tone']>, string> = { error: 'error.main', dim: 'text.disabled', tool: 'info.main', say: 'success.main', think: 'secondary.main' };
 
 function Text({ line, open, time, onClick }: { line: Line; open: boolean; time: string; onClick?: () => void }) {
   return (
@@ -14,24 +14,32 @@ function Text({ line, open, time, onClick }: { line: Line; open: boolean; time: 
     }}>
       <Box component="span" sx={{ color: 'text.secondary', flexShrink: 0 }}>{time}</Box>
       <Box component="span" sx={{ color: line.tone ? tones[line.tone] : 'warning.main', width: '8ch', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{line.label}</Box>
-      <Box component="span" sx={{ minWidth: 0, ...(open ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }) }}>{line.text}</Box>
+      <Box component="span" sx={{
+        minWidth: 0, ...(open ? {} : { overflow: 'hidden', textOverflow: 'ellipsis' }),
+        ...(line.tone === 'think' && { color: 'text.secondary', fontStyle: 'italic' }),
+      }}>{line.text}</Box>
     </Box>
   );
 }
 
 const Entry = memo(function Entry({ row }: { row: Row }) {
   const [open, setOpen] = useState(false);
-  return <Text line={describe(row.entry)} open={open} time={clock(row.entry.timestamp)} onClick={() => setOpen(!open)} />;
+  const said = describe(row.entry), think = row.entry.type === 'message' ? thinkingOf(row.entry.message) : undefined;
+  // A turn that only reasoned (then stayed quiet) has nothing else to show.
+  const lines = think && !said.text.trim() ? [think] : think ? [think, said] : [said];
+  return <>{lines.map((line, i) => <Text key={i} line={line} open={open} time={clock(row.entry.timestamp)} onClick={() => setOpen(!open)} />)}</>;
 });
 
 /** What the session is writing right now, outside the list so it stays in view as it grows. */
 function LiveLine({ tab }: { tab: string }) {
   const live = useStore(s => s.tabs[tab]?.live);
-  if (!live) return null;
-  const line = describeLive(live);
+  const lines = live ? describeLive(live) : [];
+  if (!lines.length) return null;
   return (
-    <Box sx={{ borderTop: 1, borderColor: 'divider', maxHeight: '10em', overflow: 'hidden' }}>
-      <Text line={{ ...line, text: `${line.text.slice(-800)}▍` }} open time="  live  " />
+    <Box sx={{ borderTop: 1, borderColor: 'divider', maxHeight: '12em', overflow: 'hidden' }}>
+      {lines.map((line, i) => (
+        <Text key={i} line={{ ...line, text: `${line.text.slice(-600)}${i === lines.length - 1 ? '▍' : ''}` }} open time="  live  " />
+      ))}
     </Box>
   );
 }

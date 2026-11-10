@@ -1,7 +1,7 @@
 import type { Live, Row } from './store.ts';
 
 type Entry = Row['entry'];
-export type Line = { label: string; text: string; tone?: 'error' | 'dim' | 'tool' | 'say' };
+export type Line = { label: string; text: string; tone?: 'error' | 'dim' | 'tool' | 'say' | 'think' };
 
 const json = (v: unknown) => JSON.stringify(v, null, 2);
 
@@ -9,8 +9,14 @@ const json = (v: unknown) => JSON.stringify(v, null, 2);
 export function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return content === undefined ? '' : json(content);
-  // Tool calls are listed separately by describe(); thinking stays out of the console.
+  // Tool calls and reasoning get lines of their own from describe() and thinkingOf().
   return content.map((c: any) => c.type === 'text' ? c.text : c.type === 'image' ? c.data : c.type === 'thinking' || c.type === 'toolCall' ? '' : json(c)).filter(Boolean).join('\n');
+}
+
+/** The model's reasoning in an assistant message, as a line of its own; none when it didn't reason. */
+export function thinkingOf(message: any): Line | undefined {
+  const text = Array.isArray(message?.content) ? message.content.flatMap((c: any) => c.type === 'thinking' && c.thinking ? [c.thinking] : []).join('\n').trim() : '';
+  return text ? { label: 'think', text, tone: 'think' } : undefined;
 }
 
 /** One console line for a session entry: a short label and the full text (CSS cuts it to one line until expanded). */
@@ -31,9 +37,11 @@ export function describe(entry: Entry): Line {
   return { label: m.role ?? 'message', text: textOf(m.content ?? m), tone: 'dim' };
 }
 
-export function describeLive(live: Live): Line {
-  if (live.tool) return { label: live.tool.name, text: textOf((live.tool.output as any)?.content ?? live.tool.output), tone: 'tool' };
-  return describe({ type: 'message', message: live.message } as Entry);
+/** The live area: the reasoning as it's written, then the reply or tool call once that starts. */
+export function describeLive(live: Live): Line[] {
+  if (live.tool) return [{ label: live.tool.name, text: textOf((live.tool.output as any)?.content ?? live.tool.output), tone: 'tool' }];
+  const think = thinkingOf(live.message), said = describe({ type: 'message', message: live.message } as Entry);
+  return [...think ? [think] : [], ...said.text.trim() ? [said] : []];
 }
 
 export const clock = (ms: number | string) => new Date(ms).toLocaleTimeString([], { hour12: false });
