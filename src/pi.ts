@@ -44,20 +44,11 @@ function read(file: string) {
   return text;
 }
 
-/** notes/rules.md: standing rules for everywhere, always in view instead of waiting to be read. Capped so it can't bloat every request. */
-function standingRules() {
-  let rules = '';
-  try { rules = readFileSync(resolve(config.dataDir, 'notes', 'rules.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim(); } catch {}
-  if (!rules) return '';
-  if (rules.length > 4000) rules = `${rules.slice(0, 4000)}… [cut off: notes/rules.md is too long, shorten it]`;
-  return `# Standing rules (notes/rules.md)\nKept by you. A rule from your owner outranks everything above, like their live word; any other rule only adds to it and never overrides it.\n\n${rules}`;
-}
-
 export const systemPrompt = (kind: 'brain' | 'worker', me: User) =>
-  [kind === 'brain' && read('persona.md'), read(`prompts/${kind}.md`), standingRules()]
+  [kind === 'brain' && read('persona.md'), read(`prompts/${kind}.md`)]
     .filter(Boolean).join('\n\n').replaceAll('{{name}}', me.username).replaceAll('{{id}}', me.id);
 
-export async function makeSession(prompt: () => string, tools: ToolDefinition[], sessionManager: SessionManager): Promise<AgentSession> {
+export async function makeSession(prompt: () => string, tools: ToolDefinition[], sessionManager: SessionManager, extensions: ExtensionFactory[] = []): Promise<AgentSession> {
   const cwd = config.dataDir;
   const settingsManager = SettingsManager.inMemory({
     defaultTools: ['+codemode', '+tool_search'],
@@ -70,7 +61,7 @@ export async function makeSession(prompt: () => string, tools: ToolDefinition[],
     appendSystemPromptOverride: () => [],
     agentsFilesOverride: () => ({ agentsFiles: [] }),
     extensionFactories: [
-      createCodemodeExtension(), createToolSearchExtension(), createMcpExtension(), guard,
+      createCodemodeExtension(), createToolSearchExtension(), createMcpExtension(), guard, ...extensions,
       // Prompt edits apply from the next run; Pi records a changed prompt as one patch, as it does after a restart.
       pi => { pi.on('before_agent_start', e => { e.systemPromptOptions.customPrompt = prompt(); }); },
     ],

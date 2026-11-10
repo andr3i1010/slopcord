@@ -10,8 +10,7 @@ export const sessionsDir = resolve(config.dataDir, 'sessions');
 mkdirSync(notesDir, { recursive: true });
 mkdirSync(sessionsDir, { recursive: true });
 
-const noteFiles = () => readdirSync(notesDir, { recursive: true, encoding: 'utf8' }).filter(f => f.endsWith('.md')).sort();
-const RULES_CAP = 1500;
+export const noteFiles = () => readdirSync(notesDir, { recursive: true, encoding: 'utf8' }).filter(f => f.endsWith('.md')).sort();
 
 /** One line per note, like a skills listing: the model reads a full note only when its description fits. */
 // shortcut: the whole index is re-sent whenever it changes; send diffs once notes pass ~200 files.
@@ -20,25 +19,6 @@ export function memoryIndex() {
     const description = /^description:\s*(.+)$/m.exec(readFileSync(join(notesDir, f), 'utf8').slice(0, 1000))?.[1];
     return `- notes/${f}: ${description ?? '(no description)'}`;
   }).join('\n') || '(no notes yet)';
-}
-
-/**
- * The `## Rules` of every note whose frontmatter `applies:` names a server, channel or person in these events,
- * so a rule is in view when it matters instead of only when the model remembers to read its note.
- */
-// shortcut: reads every note per batch; keep an index of `applies` once notes pass ~200 files.
-export function rulesFor(events: string) {
-  const ids = new Set([...events.matchAll(/"(?:id|channelId|guildId)":"(\d+)"/g)].map(m => m[1]));
-  const found = noteFiles().flatMap(f => {
-    const lines = readFileSync(join(notesDir, f), 'utf8').split('\n');
-    const applies = /^applies:\s*\[?([^\]\n]*)/m.exec(lines.slice(0, 20).join('\n'))?.[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
-    const start = lines.findIndex(l => /^## Rules\b/.test(l));
-    if (!applies?.some(id => ids.has(id)) || start < 0) return [];
-    const end = lines.findIndex((l, i) => i > start && l.startsWith('#'));
-    const rules = lines.slice(start + 1, end < 0 ? undefined : end).join('\n').trim();
-    return rules ? [`notes/${f}:\n${rules}`] : [];
-  }).join('\n');
-  return found.length > RULES_CAP ? `${found.slice(0, RULES_CAP)}… [cut off: read those notes, and shorten their rules]` : found;
 }
 
 /** Every string under `text` or `content` keys, skipping base64 image data. */

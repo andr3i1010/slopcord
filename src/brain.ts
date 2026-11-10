@@ -5,7 +5,8 @@ import { defineTool, SessionManager, type AgentSession, type AgentSessionEvent }
 import { container } from '@sapphire/framework';
 import { Type } from 'typebox';
 import { chain, config, localTime, redact } from './config.ts';
-import { memoryIndex, rulesFor, searchHistory, sessionsDir } from './memory.ts';
+import { memoryGate } from './jev.ts';
+import { memoryIndex, searchHistory, sessionsDir } from './memory.ts';
 import { lastReply, makeSession, systemPrompt } from './pi.ts';
 import { channel, describe, discordTools, fetchMessage, outgoing, text } from './tools.ts';
 import { workerList, workerTools } from './workers.ts';
@@ -30,7 +31,7 @@ const pending = new Map<string, Pending>(load<Pending[]>('pending.json', []).map
 let wakes = load<Wake[]>('wakes.json', []);
 let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {}, compactingNow = false;
-let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
+let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastEvents = '', lastError = '', indexShown = '', nudged = false;
 const MAX_FAILURES = 5;
 let failures = 0, down = false, ticker: NodeJS.Timeout | undefined;
 let failure: Error | undefined;
@@ -75,10 +76,10 @@ export function deliver(lines: string, images: ImageContent[] = [], urgent = fal
     const index = memoryIndex();
     const memo = index === indexShown ? '' : `\n[memory index, read a note before relying on it]\n${index}`;
     indexShown = index;
-    const rules = rulesFor(lines);
     // The rule the model slips on most, as the last thing it reads before acting.
     const remind = /"kind":"(message|edit)"/.test(lines) ? '\n[reminder] Answering someone? `send` with `replyTo` = the `id` of their message above, in its channel. Then `-`.' : '';
-    lastBatch = `[events · ${localTime()}]\n${lines}${memo}${rules ? `\n[rules from your notes that apply here]\n${rules}` : ''}${remind}`;
+    lastBatch = `[events · ${localTime()}]\n${lines}${memo}${remind}`;
+    lastEvents = lines;
     lastActivity = Date.now();
     await new Promise<void>(accepted => {
       const fail = (err: unknown) => { void report(err, take(ids)); accepted(); if (running === undefined) pump(); };
@@ -157,7 +158,7 @@ function answered(reply: AssistantMessage) {
 
 function onEvent(e: AgentSessionEvent) {
   lastActivity = Date.now();
-  if (e.type === 'agent_start') runStarted = lastActivity;
+  if (e.type === 'agent_start') { runStarted = lastActivity; recallGate.newRun(); }
   else if (e.type === 'tool_execution_start') {
     lastTool = `${e.toolName} ${JSON.stringify(e.args)}`.slice(0, 4000);
     if (e.toolName === 'send') sentTo.add(e.args?.channelId);
@@ -172,6 +173,8 @@ function onEvent(e: AgentSessionEvent) {
     if (e.errorMessage && !e.willRetry) void report(new Error(`compaction failed: ${e.errorMessage}`));
   } else if (e.type === 'agent_settled') settle(e.aborted);
 }
+
+const recallGate = memoryGate(() => lastEvents);
 
 const typing = (channelId: string) => void channel(channelId).then(c => c.sendTyping()).catch(() => {});
 export const isPending = (messageId: string) => pending.has(messageId);
@@ -256,6 +259,7 @@ export async function start() {
     () => prompt,
     [...discordTools(false), wakeMe, searchHistory, ...workerTools(deliver)],
     SessionManager.continueRecent(config.dataDir, sessionsDir),
+    [recallGate.extension],
   );
   session.subscribe(onEvent);
   ticker = setInterval(tick, 8000);
