@@ -96,7 +96,7 @@ function command(name: string, description: string, ownerOnly: boolean, run: () 
       registry.registerChatInputCommand(b => b.setName(name).setDescription(description));
     }
     override async chatInputRun(interaction: Command.ChatInputCommandInteraction) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply({ /* flags: MessageFlags.Ephemeral */ });
       await interaction.editReply(await run());
     }
   };
