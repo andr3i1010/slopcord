@@ -31,6 +31,8 @@ let wakes = load<Wake[]>('wakes.json', []);
 let gate: Promise<unknown> = Promise.resolve();
 let compacting: Promise<void> = Promise.resolve(), endCompaction = () => {}, compactingNow = false;
 let lastActivity = Date.now(), runStarted = 0, lastTool = '', lastBatch = '', lastError = '', indexShown = '', nudged = false;
+const MAX_FAILURES = 5;
+let failures = 0, down = false, ticker: NodeJS.Timeout | undefined;
 let failure: Error | undefined;
 type Batch = { lines: string; images: ImageContent[]; urgent: boolean; ids: string[]; target?: Pending };
 /** One run is about one channel, so its answers can't land elsewhere. Batches for other channels wait here. */
@@ -65,6 +67,7 @@ function addWake(ms: number, why: string) {
  * The gate keeps two deliveries from racing into two runs.
  */
 export function deliver(lines: string, images: ImageContent[] = [], urgent = false, ids: string[] = [], target?: Pending) {
+  if (down) return;
   gate = gate.then(async () => {
     const key = target?.channelId ?? '';
     if (running !== undefined && running !== key && !urgent) return void waiting.push({ lines, images, urgent, ids, target });
@@ -108,6 +111,9 @@ function settle(aborted: boolean) {
   running = speakTo = undefined;
   pingedTo = false;
   sentTo = new Set();
+  // In an outage every run fails and its batch piles onto the context until nothing can compact it (10 Nov). Stop instead.
+  failures = err ? failures + 1 : 0;
+  if (failures >= MAX_FAILURES) return void shutdown(err!);
   pump();
   if (!wakes.some(w => w.at < Date.now() + IDLE_WAKE_MS)) addWake(IDLE_WAKE_MS, 'idle check-in: nothing else was scheduled');
   const usage = session.getContextUsage();
@@ -115,6 +121,18 @@ function settle(aborted: boolean) {
     nudged = true;
     deliver(`[harness] Context is ${Math.round(usage!.percent!)}% full; older context will be summarized soon. Save anything worth keeping to notes/ now.`);
   }
+}
+
+/** Go dark after MAX_FAILURES failed runs in a row and tell the owner; stays down until restarted (Orchard → Restart). */
+async function shutdown(err: Error) {
+  down = true;
+  clearInterval(ticker);
+  console.error(`Shutting down after ${MAX_FAILURES} failed runs in a row:`, err);
+  const message = `🛑 Going offline: ${MAX_FAILURES} runs in a row failed. Last error: ${redact(err.message).slice(0, 300)}\nRestart me in Orchard once that's fixed.`;
+  await (await container.client.users.fetch(config.ownerId)).send(message).catch(() => {});
+  await container.client.destroy();
+  // Stay alive and idle: exiting would make Kubernetes restart the bot straight back into the failures.
+  setInterval(() => {}, 1 << 30);
 }
 
 /** Next waiting channel (pings first), with everything that piled up for it merged into one batch. */
@@ -240,7 +258,7 @@ export async function start() {
     SessionManager.continueRecent(config.dataDir, sessionsDir),
   );
   session.subscribe(onEvent);
-  setInterval(tick, 8000);
+  ticker = setInterval(tick, 8000);
   for (const p of [...pending.values()]) {
     const m = await fetchMessage(p.channelId, p.messageId).catch(() => undefined);
     if (m) deliver(describe(m, 'message', true), [], true, [m.id], p);
