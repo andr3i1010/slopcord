@@ -28,7 +28,9 @@ const newer = (a: string, b: string) => BigInt(a) > BigInt(b);
 
 export async function loadOverview() {
   try {
-    const overview = await (await api.discord.$get()).json();
+    const res = await api.discord.$get();
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText);
+    const overview = await res.json();
     set(s => ({ overview, guild: s.guild ?? overview.guilds[0]?.id ?? '@me' }));
     if (!get().channel) {
       const first = overview.guilds[0]?.channels.filter(c => !c.category).sort((a, b) => a.position - b.position)[0];

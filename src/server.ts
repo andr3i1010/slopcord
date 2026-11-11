@@ -145,7 +145,7 @@ function overview() {
   return {
     me: { id: me.id, name: me.displayName, avatar: me.displayAvatarURL({ size: 64 }) },
     guilds: client.guilds.cache.map(g => ({
-      id: g.id, name: g.name, icon: g.iconURL({ size: 96 }) ?? undefined,
+      id: g.id, name: g.name, icon: g.iconURL({ size: 128 }) ?? undefined,
       emojis: g.emojis.cache.map(e => ({ id: e.id, name: e.name ?? '', animated: !!e.animated })),
       channels: g.channels.cache.filter(c => c.type === ChannelType.GuildCategory || textTypes.includes(c.type)).map(c => {
         const p = g.members.me ? c.permissionsFor(g.members.me) : null, has = (flag: bigint) => !!p?.has(flag);

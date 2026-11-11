@@ -11,7 +11,7 @@ export const d = {
   font: '"Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif',
 };
 
-const emojiUrl = (id: string, animated: boolean, size = 48) => `https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'webp'}?size=${size}`;
+const emojiUrl = (id: string, animated: boolean, size = 64) => `https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'webp'}?size=${size}`;
 const pill = { bgcolor: d.mention, color: d.mentionText, borderRadius: '3px', px: '2px', fontWeight: 500, cursor: 'default' };
 
 function Timestamp({ ts, format }: { ts: string; format?: string }) {
@@ -141,7 +141,7 @@ function EmojiPicker({ anchor, onClose, onPick }: { anchor: HTMLElement | null; 
       {!!custom.length && <>
         <Box sx={{ fontSize: 12, fontWeight: 600, color: d.muted, textTransform: 'uppercase', mt: 1, mb: 0.5 }}>This server</Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', maxHeight: 180, overflow: 'auto' }}>
-          {custom.map(e => <Box key={e.id} sx={cell} title={`:${e.name}:`} onClick={() => pick(`${e.name}:${e.id}`)}><img src={emojiUrl(e.id, e.animated, 48)} alt={e.name} style={{ width: 26, height: 26, objectFit: 'contain' }} /></Box>)}
+          {custom.map(e => <Box key={e.id} sx={cell} title={`:${e.name}:`} onClick={() => pick(`${e.name}:${e.id}`)}><img src={emojiUrl(e.id, e.animated, 64)} alt={e.name} style={{ width: 26, height: 26, objectFit: 'contain' }} /></Box>)}
         </Box>
       </>}
       <TextField size="small" fullWidth placeholder="Any emoji, then Enter" value={other} onChange={e => setOther(e.target.value)} sx={{ mt: 1 }}
