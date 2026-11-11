@@ -278,13 +278,14 @@ export async function start() {
   }
 }
 
+const where = (channelId: string) => {
+  const c = container.client.channels.cache?.get(channelId);
+  return !c ? channelId : c.isDMBased() ? 'DM' : `#${c.name}`;
+};
+
 /** What /status and the dashboard show. Times are epoch ms, so the dashboard can tick durations itself. */
 export function state() {
   const usage = session?.getContextUsage();
-  const where = (channelId: string) => {
-    const c = container.client.channels.cache?.get(channelId);
-    return !c ? channelId : c.isDMBased() ? 'DM' : `#${c.name}`;
-  };
   return {
     startedAt: Math.round(performance.timeOrigin),
     ready: !!session, down,
@@ -325,6 +326,14 @@ export function interject(text: string) {
 export function deleteWake(at: number) {
   wakes = wakes.filter(w => w.at !== at);
   save('wakes.json', wakes);
+}
+
+/**
+ * The owner posted as the bot from the dashboard. Discord doesn't echo the bot's own messages to it, so the brain hears it
+ * here: channel-less and not urgent, so it learns what "it" said without being asked to answer.
+ */
+export function postedAsYou(channelId: string, ids: string[], text: string, files: string[]) {
+  deliver(JSON.stringify({ kind: 'owner_as_you', time: new Date().toISOString(), channelId, where: where(channelId), ids, text, files: files.length ? files : undefined }));
 }
 
 /** Forget a ping that will never be answered. */

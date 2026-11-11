@@ -1,6 +1,7 @@
 import { hc } from 'hono/client';
 import { create } from 'zustand';
 import type { AppType, Events } from '../../src/server.ts';
+import { onDiscord } from './discord/store.ts';
 
 export const api = hc<AppType>(location.origin).api;
 
@@ -91,6 +92,7 @@ export function connect() {
     if (!get().tabs[tab].rows.length) void loadOlder(tab);
   });
   on('session-end', ({ tab }) => patch(tab, () => ({ ended: true, live: undefined })));
+  on('discord', onDiscord);
   // EventSource reconnects by itself; the next hello fills the gap.
   es.onerror = () => set({ connected: false });
 }

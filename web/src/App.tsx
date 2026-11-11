@@ -2,6 +2,7 @@ import { Accordion, AccordionDetails, AccordionSummary, Box, Icon, List, ListIte
 import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Console } from './Console.tsx';
+import { Discord } from './discord/Discord.tsx';
 import { clock } from './format.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { api, closeTab, toast, useStore } from './store.ts';
@@ -81,7 +82,7 @@ export function App() {
   const sessions = useStore(useShallow(s => Object.keys(s.tabs).filter(k => k !== 'brain').map(k => `${k}${s.tabs[k].ended ? ' ✓' : ''}`)));
   const errorCount = useStore(s => s.errors.length), message = useStore(s => s.toast);
   const [current, setCurrent] = useState('brain');
-  const view = ['brain', 'errors', 'notes'].includes(current) || sessions.some(s => s.split(' ')[0] === current) ? current : 'brain';
+  const view = ['brain', 'discord', 'errors', 'notes'].includes(current) || sessions.some(s => s.split(' ')[0] === current) ? current : 'brain';
   return (
     <Box sx={{ display: 'flex', height: '100vh', bgcolor: m3.surface }}>
       <Sidebar />
@@ -97,6 +98,7 @@ export function App() {
                   </Box>
                 : id} />;
             })}
+            <Tab value="discord" label="Discord" icon={<Icon>forum</Icon>} iconPosition="start" />
             <Tab value="errors" icon={<Icon>report</Icon>} iconPosition="start" label={
               <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>Errors
                 {errorCount > 0 && <Box component="span" sx={{ px: 0.75, borderRadius: 2, bgcolor: m3.error, color: m3.onError, fontSize: 11, lineHeight: '16px' }}>{errorCount}</Box>}
@@ -106,7 +108,7 @@ export function App() {
           <Connection />
         </Box>
         <Box sx={{ flex: 1, minHeight: 0, borderRadius: 4, bgcolor: m3.surfaceContainerLowest, overflow: 'hidden' }}>
-          {view === 'errors' ? <Errors /> : view === 'notes' ? <Notes /> : <Console key={view} tab={view} />}
+          {view === 'errors' ? <Errors /> : view === 'notes' ? <Notes /> : view === 'discord' ? <Discord /> : <Console key={view} tab={view} />}
         </Box>
       </Box>
       <Snackbar open={!!message} message={message} autoHideDuration={4000} onClose={() => useStore.setState({ toast: undefined })} />
