@@ -257,6 +257,8 @@ const dist = resolve(root, 'web/dist');
 const app = new Hono()
   .route('/', api)
   .all('/api/*', c => c.json({ error: 'not found' }, 404))
+  // Vite hashes asset names, so those never change; the page itself must be re-checked or browsers keep an old build.
+  .use('*', async (c, next) => { await next(); c.header('Cache-Control', c.req.path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'); })
   .use('*', serveStatic({ root: dist }))
   .get('*', serveStatic({ path: resolve(dist, 'index.html') }))
   .onError((err, c) => err instanceof HTTPException ? err.getResponse() : c.json({ error: redact(err.message) }, 500));
