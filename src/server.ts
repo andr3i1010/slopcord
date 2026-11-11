@@ -164,6 +164,20 @@ function overview() {
 
 const messageIn = (c: { req: { param(key: 'id' | 'mid'): string } }) => fetchMessage(c.req.param('id'), c.req.param('mid'));
 
+/**
+ * discord.js only knows DMs that had a message since startup, and Discord can't list a bot's DMs. The brain's transcript
+ * has every DM it saw (`"where":"DM"` in its event lines), so fetch those channels back into the cache.
+ */
+async function recallDms(session: AgentSession) {
+  const ids = new Set<string>();
+  for (const e of session.sessionManager.getEntries()) {
+    const content = e.type === 'message' ? (e.message as { content?: unknown }).content : undefined;
+    const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map(p => p?.type === 'text' ? p.text : '').join('\n') : '';
+    if (text.includes('"where":"DM"')) for (const m of text.matchAll(/"channelId":"(\d+)"[^\n]*?"where":"DM"/g)) ids.add(m[1]);
+  }
+  await Promise.all([...ids].map(id => container.client.channels.fetch(id).catch(() => undefined)));
+}
+
 async function restart() {
   // Kubernetes starts the pod again, which is also the way back after brain.ts shut the bot down.
   await container.client.destroy().catch(() => {});
@@ -266,6 +280,7 @@ const app = new Hono()
 /** Listen before Discord logs in, so the dashboard (and its restart button) works even when the bot doesn't. */
 export function start() {
   bus.on('session', watch);
+  bus.on('session', (tab, session) => { if (tab === 'brain') void recallDms(session); });
   bus.on('session-end', unwatch);
   bus.on('reported', r => broadcast('reported', r));
   const client = container.client;
